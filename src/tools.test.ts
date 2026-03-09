@@ -65,6 +65,8 @@ beforeAll(async () => {
   await fs.writeFile(path.join(tmp, "src", "utils.ts"), "export const add = (a: number, b: number) => a + b\n")
   await fs.mkdir(path.join(tmp, "src", "lib"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "lib", "helper.ts"), "export function help() {}\n")
+  await fs.writeFile(path.join(tmp, "src", "existing.ts"), "existing\n")
+  await fs.mkdir(path.join(tmp, "src", "existing-dir"), { recursive: true })
 
   // binary
   const buf = Buffer.alloc(64)
@@ -98,6 +100,8 @@ beforeAll(async () => {
   await fs.utimes(path.join(tmp, "big.txt"), t7, t7)
   await fs.utimes(path.join(tmp, "multi-match.ts"), t8, t8)
   await fs.utimes(path.join(tmp, "data.bin"), t9, t9)
+  const tExisting = new Date(now.getTime() - 15_000)
+  await fs.utimes(path.join(tmp, "src", "existing.ts"), tExisting, tExisting)
 
   // mock the ToolsProviderController
   const mockCtl = {
@@ -199,8 +203,10 @@ describe("list tool", () => {
     expect(listLines(result)).toEqual([
       `${tmp}/`,
       "  src/",
+      "    existing-dir/",
       "    lib/",
       "      helper.ts",
+      "    existing.ts",
       "    index.ts",
       "    utils.ts",
       "  big.txt",
@@ -275,6 +281,7 @@ describe("glob tool", () => {
     expect(pathLines(result)).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "existing.ts"),
       path.join(tmp, "src", "utils.ts"),
       path.join(tmp, "src", "lib", "helper.ts"),
       path.join(tmp, "search-me.ts"),
@@ -297,6 +304,7 @@ describe("glob tool", () => {
     expect(pathLines(result)).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "existing.ts"),
       path.join(tmp, "src", "utils.ts"),
       path.join(tmp, "src", "lib", "helper.ts"),
       path.join(tmp, "search-me.ts"),
@@ -308,6 +316,7 @@ describe("glob tool", () => {
     expect(pathLines(result)).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "existing.ts"),
       path.join(tmp, "src", "utils.ts"),
       path.join(tmp, "search-me.ts"),
     ])
@@ -458,5 +467,135 @@ describe("grep tool", () => {
   it("returns error for missing directory", async () => {
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "nope") })
     expect(result).toContain("Error: Directory not found")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// create
+// ---------------------------------------------------------------------------
+describe("create tool", () => {
+  // --- file creation ---
+  it("creates a new file with content", async () => {
+    const target = path.join(tmp, "created.txt")
+    const result = await tools.create({ type: "file", path: target, content: "hello\nworld\n" })
+    expect(result).toContain("Created file:")
+    expect(result).toContain("(2 lines)")
+    const actual = await fs.readFile(target, "utf8")
+    expect(actual).toBe("hello\nworld\n")
+  })
+
+  it("creates a new empty file when content is omitted", async () => {
+    const target = path.join(tmp, "created-empty.txt")
+    const result = await tools.create({ type: "file", path: target })
+    expect(result).toContain("Created file:")
+    expect(result).toContain("(empty)")
+    const actual = await fs.readFile(target, "utf8")
+    expect(actual).toBe("")
+  })
+
+  it("creates parent directories automatically for files", async () => {
+    const target = path.join(tmp, "deep", "nested", "dir", "file.txt")
+    const result = await tools.create({ type: "file", path: target, content: "hi" })
+    expect(result).toContain("Created file:")
+    const actual = await fs.readFile(target, "utf8")
+    expect(actual).toBe("hi")
+  })
+
+  it("returns error when file already exists", async () => {
+    const target = path.join(tmp, "src", "existing.ts")
+    const result = await tools.create({ type: "file", path: target, content: "new" })
+    expect(result).toContain("Error: File already exists:")
+  })
+
+  it("overwrites existing file when overwrite is true", async () => {
+    const target = path.join(tmp, "src", "existing.ts")
+    const result = await tools.create({ type: "file", path: target, content: "new\n", overwrite: true })
+    expect(result).toContain("Created file:")
+    expect(result).toContain("(1 lines)")
+    const actual = await fs.readFile(target, "utf8")
+    expect(actual).toBe("new\n")
+  })
+
+  it("creates a file with base64 encoding", async () => {
+    const data = Buffer.from("binary data")
+    const target = path.join(tmp, "created.bin")
+    const result = await tools.create({ type: "file", path: target, content: data.toString("base64"), encoding: "base64" })
+    expect(result).toContain("Created file:")
+    const actual = await fs.readFile(target)
+    expect(actual.equals(data)).toBe(true)
+  })
+
+  // --- directory creation ---
+  it("creates a new directory", async () => {
+    const target = path.join(tmp, "new-dir")
+    const result = await tools.create({ type: "directory", path: target })
+    expect(result).toContain("Created directory:")
+    const stat = await fs.stat(target)
+    expect(stat.isDirectory()).toBe(true)
+  })
+
+  it("creates nested directories recursively by default", async () => {
+    const target = path.join(tmp, "a", "b", "c", "d")
+    const result = await tools.create({ type: "directory", path: target })
+    expect(result).toContain("Created directory:")
+    const stat = await fs.stat(target)
+    expect(stat.isDirectory()).toBe(true)
+  })
+
+  it("returns error when directory already exists", async () => {
+    const target = path.join(tmp, "src", "existing-dir")
+    const result = await tools.create({ type: "directory", path: target })
+    expect(result).toContain("Error: Directory already exists:")
+  })
+
+  it("returns error when recursive is false and parent missing", async () => {
+    const target = path.join(tmp, "no-parent", "child")
+    const result = await tools.create({ type: "directory", path: target, recursive: false })
+    expect(result).toContain("Error:")
+  })
+
+  // --- validation: mismatched parameters ---
+  it("returns error when file type has recursive set to false", async () => {
+    const result = await tools.create({ type: "file", path: path.join(tmp, "v1.txt"), content: "x", recursive: false })
+    expect(result).toBe('Error: Parameter "recursive" is not used when type is file')
+  })
+
+  it("allows file type with recursive set to true (default value)", async () => {
+    const target = path.join(tmp, "v2.txt")
+    const result = await tools.create({ type: "file", path: target, content: "x", recursive: true })
+    expect(result).toContain("Created file:")
+  })
+
+  it("returns error when directory type has content set", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v3"), content: "oops" })
+    expect(result).toBe('Error: Parameter "content" is not used when type is directory')
+  })
+
+  it("returns error when directory type has overwrite set to true", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v4"), overwrite: true })
+    expect(result).toBe('Error: Parameter "overwrite" is not used when type is directory')
+  })
+
+  it("returns error when directory type has encoding set to base64", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v5"), encoding: "base64" })
+    expect(result).toBe('Error: Parameter "encoding" is not used when type is directory')
+  })
+
+  it("allows directory type with encoding set to utf8 (default value)", async () => {
+    const target = path.join(tmp, "v6")
+    const result = await tools.create({ type: "directory", path: target, encoding: "utf8" })
+    expect(result).toContain("Created directory:")
+  })
+
+  it("allows directory type with overwrite set to false (default value)", async () => {
+    const target = path.join(tmp, "v7")
+    const result = await tools.create({ type: "directory", path: target, overwrite: false })
+    expect(result).toContain("Created directory:")
+  })
+
+  // --- security ---
+  it("returns error for path outside base directory", async () => {
+    const result = await tools.create({ type: "file", path: "/tmp/escape.txt", content: "x" })
+    expect(result).toContain("Error:")
   })
 })

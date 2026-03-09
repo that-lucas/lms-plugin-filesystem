@@ -4,7 +4,7 @@ Filesystem tools for LM Studio.
 
 This plugin adds a small set of practical filesystem tools to LM Studio chats.
 
-## Tools
+## Read-only
 
 ### `read`
 
@@ -82,3 +82,23 @@ Notes:
   - `/var/run`
   - `/private/var/run`
   - `/Volumes`
+
+## Write
+
+### `create`
+
+Create a new file or directory.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `type` | `file` \| `directory` | - | Whether to create a file or a directory |
+| `path` | string | - | Absolute or home-relative path (e.g., `/Users/john/file.ext`, `~/path/to/dir`) |
+| `content` | string | - | File content. Only used when type is `file`. |
+| `overwrite` | boolean | `false` | Allow replacing an existing file. Only used when type is `file`. |
+| `recursive` | boolean | `true` | Create parent directories. Only used when type is `directory`. |
+| `encoding` | `utf8` \| `base64` | `utf8` | Content encoding. Only used when type is `file`. |
+
+Notes:
+
+- parent directories are always created automatically for files
+- parameters that don't apply to the chosen type are rejected if set to a non-default value

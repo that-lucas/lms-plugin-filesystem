@@ -242,5 +242,63 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }),
   )
 
+  tools.push(
+    tool({
+      name: "create",
+      description:
+        "Create a new file or directory at an absolute or home-relative path. Parent directories are created automatically for files. Fails if the target already exists unless overwrite is set to true.",
+      parameters: {
+        type: z.enum(["file", "directory"]).describe("Whether to create a file or a directory"),
+        path: z.string().describe("Absolute or home-relative path (e.g., /Users/john/file.ext, ~/path/to/dir)"),
+        content: z.string().optional().describe("The file content. Only used when type is file."),
+        overwrite: z.boolean().optional().describe("Allow replacing an existing file. Only used when type is file. Defaults to false."),
+        recursive: z.boolean().optional().describe("Create parent directories if they don't exist. Only used when type is directory. Defaults to true."),
+        encoding: z.enum(["utf8", "base64"]).optional().describe("Content encoding. Only used when type is file. Defaults to utf8."),
+      },
+      implementation: async ({ type, path: input, content, overwrite, recursive, encoding }) => {
+        const base = baseDir()
+        const target = resolveInputPath(base, input)
+        if (target.startsWith("Error:")) return target
+
+        if (type === "file") {
+          if (recursive !== undefined && recursive !== true) {
+            return `Error: Parameter "recursive" is not used when type is file`
+          }
+          const stat = await fs.stat(target).catch(() => undefined)
+          if (stat && !overwrite) return `Error: File already exists: ${target}`
+          await fs.mkdir(path.dirname(target), { recursive: true })
+          if (encoding === "base64") {
+            await fs.writeFile(target, Buffer.from(content || "", "base64"))
+          } else {
+            await fs.writeFile(target, content || "", "utf8")
+          }
+          const lines = content ? content.split(/\r?\n/) : []
+          const count = content && content.length > 0 ? (content.endsWith("\n") ? lines.length - 1 : lines.length) : 0
+          return `Created file: ${relPath(base, target)} (${count === 0 ? "empty" : `${count} lines`})`
+        }
+
+        // type === "directory"
+        if (content !== undefined) {
+          return `Error: Parameter "content" is not used when type is directory`
+        }
+        if (overwrite !== undefined && overwrite !== false) {
+          return `Error: Parameter "overwrite" is not used when type is directory`
+        }
+        if (encoding !== undefined && encoding !== "utf8") {
+          return `Error: Parameter "encoding" is not used when type is directory`
+        }
+        const stat = await fs.stat(target).catch(() => undefined)
+        if (stat) return `Error: Directory already exists: ${target}`
+        const rec = recursive ?? true
+        try {
+          await fs.mkdir(target, { recursive: rec })
+        } catch (error) {
+          return `Error: ${error instanceof Error ? error.message : String(error)}`
+        }
+        return `Created directory: ${relPath(base, target)}`
+      },
+    }),
+  )
+
   return tools
 }
