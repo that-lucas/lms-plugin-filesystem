@@ -212,7 +212,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     tool({
       name: "grep",
       description:
-        "Search file contents using a regular expression from an absolute or home-relative path. Searches recursively, orders matching files by most recently modified first, groups matches by file path, skips binary files, and skips the following special system paths: /dev, /proc, /sys, /run, /var/run, /private/var/run, /Volumes.",
+        "Search file contents using a regular expression from an absolute or home-relative path. Searches recursively, orders matching files by most recently modified first, groups matches by file path, returns structured match metadata, skips binary files, and skips the following special system paths: /dev, /proc, /sys, /run, /var/run, /private/var/run, /Volumes.",
       parameters: {
         pattern: z.string().describe("The regex pattern to search for in file contents"),
         path: z.string().optional().describe("The absolute or home-relative directory to search in (e.g., /Users/john, ~/path/to/dir)"),
@@ -250,18 +250,31 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             regex.lastIndex = 0
           }
         }
-        if (matches.length === 0) return "No matches found"
-        matches.sort((a, b) => b.time - a.time)
-        const out = [`Found ${matches.length} matches`]
-        let current = ""
+        matches.sort((a, b) => (b.time - a.time) || (a.line - b.line))
+
+        const grouped: Array<{ path: string; matches: Array<{ line: number; text: string }> }> = []
+        let current: { path: string; matches: Array<{ line: number; text: string }> } | undefined
         for (const match of matches) {
-          if (current !== match.path) {
-            if (current) out.push("")
-            current = match.path
-            out.push(`${match.path}:`)
+          if (!current || current.path !== match.path) {
+            current = { path: match.path, matches: [] }
+            grouped.push(current)
           }
-          out.push(`  Line ${match.line}: ${match.text}`)
+          current.matches.push({ line: match.line, text: match.text })
         }
+
+        const out = [
+          `<path>${dir}</path>`,
+          `<pattern>${pattern}</pattern>`,
+          `<matches total="${matches.length}" files="${grouped.length}">`,
+        ]
+        for (const file of grouped) {
+          out.push(`<file path="${file.path}">`)
+          for (const match of file.matches) {
+            out.push(`  <match line="${match.line}">${match.text}</match>`)
+          }
+          out.push(`</file>`)
+        }
+        out.push(`</matches>`)
         return out.join("\n")
       },
     }),

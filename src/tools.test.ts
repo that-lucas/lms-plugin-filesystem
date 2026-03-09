@@ -25,23 +25,32 @@ const blockLines = (output: string, name: string) => {
 }
 
 const parseGrep = (output: string) => {
-  const files: Array<{ path: string; matches: Array<{ line: number; text: string }> }> = []
-  let current: { path: string; matches: Array<{ line: number; text: string }> } | undefined
+  const path = mustTag(output, "path")
+  const pattern = mustTag(output, "pattern")
+  const matchesOpen = output.match(/<matches total="(\d+)" files="(\d+)">/)
+  const matchesBody = output.match(/<matches total="\d+" files="\d+">([\s\S]*)<\/matches>/)
+  if (!matchesOpen || !matchesBody) throw new Error("Invalid grep output")
 
-  for (const line of output.split("\n")) {
-    if (!line || line.startsWith("Found ")) continue
-    if (line.endsWith(":")) {
-      current = { path: line.slice(0, -1), matches: [] }
-      files.push(current)
-      continue
+  const files: Array<{ path: string; matches: Array<{ line: number; text: string }> }> = []
+  const fileRegex = /<file path="([\s\S]*?)">([\s\S]*?)<\/file>/g
+  for (const fileMatch of matchesBody[1].matchAll(fileRegex)) {
+    const filePath = fileMatch[1]
+    const body = fileMatch[2]
+    const matches: Array<{ line: number; text: string }> = []
+    const matchRegex = /<match line="(\d+)">([\s\S]*?)<\/match>/g
+    for (const item of body.matchAll(matchRegex)) {
+      matches.push({ line: Number(item[1]), text: item[2] })
     }
-    const match = line.match(/^  Line (\d+): (.*)$/)
-    if (match && current) {
-      current.matches.push({ line: Number(match[1]), text: match[2] })
-    }
+    files.push({ path: filePath, matches })
   }
 
-  return files
+  return {
+    path,
+    pattern,
+    total: Number(matchesOpen[1]),
+    files: Number(matchesOpen[2]),
+    matches: files,
+  }
 }
 
 const parseRead = (output: string) => {
@@ -445,75 +454,80 @@ describe("glob tool", () => {
 describe("grep tool", () => {
   it("finds matches in files", async () => {
     const result = await tools.grep({ pattern: "foo", path: tmp })
-    expect(parseGrep(result)).toEqual([
-      {
-        path: path.join(tmp, "multi-match.ts"),
-        matches: [
-          { line: 1, text: "foo one" },
-          { line: 2, text: "foo two" },
-          { line: 3, text: "foo three" },
-        ],
-      },
-      {
-        path: path.join(tmp, "search-me.ts"),
-        matches: [
-          { line: 1, text: 'const foo = "bar"' },
-          { line: 3, text: "foo()" },
-        ],
-      },
-    ])
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "foo",
+      total: 5,
+      files: 2,
+      matches: [
+        {
+          path: path.join(tmp, "multi-match.ts"),
+          matches: [
+            { line: 1, text: "foo one" },
+            { line: 2, text: "foo two" },
+            { line: 3, text: "foo three" },
+          ],
+        },
+        {
+          path: path.join(tmp, "search-me.ts"),
+          matches: [
+            { line: 1, text: 'const foo = "bar"' },
+            { line: 3, text: "foo()" },
+          ],
+        },
+      ],
+    })
   })
 
   it("returns line numbers", async () => {
     const result = await tools.grep({ pattern: "baz", path: tmp })
-    expect(parseGrep(result)).toEqual([
-      {
-        path: path.join(tmp, "search-me.ts"),
-        matches: [{ line: 2, text: 'const baz = "qux"' }],
-      },
-    ])
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "baz",
+      total: 1,
+      files: 1,
+      matches: [{ path: path.join(tmp, "search-me.ts"), matches: [{ line: 2, text: 'const baz = "qux"' }] }],
+    })
   })
 
   it("searches recursively", async () => {
     const result = await tools.grep({ pattern: "hello", path: tmp })
-    expect(parseGrep(result)).toEqual([
-      {
-        path: path.join(tmp, "src", "index.ts"),
-        matches: [{ line: 1, text: 'export const main = () => "hello"' }],
-      },
-    ])
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "hello",
+      total: 1,
+      files: 1,
+      matches: [{ path: path.join(tmp, "src", "index.ts"), matches: [{ line: 1, text: 'export const main = () => "hello"' }] }],
+    })
   })
 
   it("respects include filter", async () => {
     const result = await tools.grep({ pattern: "export", path: tmp, include: ["*.ts"] })
-    expect(parseGrep(result)).toEqual([
-      {
-        path: path.join(tmp, "src", "index.ts"),
-        matches: [{ line: 1, text: 'export const main = () => "hello"' }],
-      },
-      {
-        path: path.join(tmp, "src", "utils.ts"),
-        matches: [{ line: 1, text: "export const add = (a: number, b: number) => a + b" }],
-      },
-      {
-        path: path.join(tmp, "src", "lib", "helper.ts"),
-        matches: [{ line: 1, text: "export function help() {}" }],
-      },
-    ])
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "export",
+      total: 3,
+      files: 3,
+      matches: [
+        { path: path.join(tmp, "src", "index.ts"), matches: [{ line: 1, text: 'export const main = () => "hello"' }] },
+        { path: path.join(tmp, "src", "utils.ts"), matches: [{ line: 1, text: "export const add = (a: number, b: number) => a + b" }] },
+        { path: path.join(tmp, "src", "lib", "helper.ts"), matches: [{ line: 1, text: "export function help() {}" }] },
+      ],
+    })
   })
 
   it("respects exclude filter", async () => {
     const result = await tools.grep({ pattern: "export", path: tmp, exclude: ["src/lib/**"] })
-    expect(parseGrep(result)).toEqual([
-      {
-        path: path.join(tmp, "src", "index.ts"),
-        matches: [{ line: 1, text: 'export const main = () => "hello"' }],
-      },
-      {
-        path: path.join(tmp, "src", "utils.ts"),
-        matches: [{ line: 1, text: "export const add = (a: number, b: number) => a + b" }],
-      },
-    ])
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "export",
+      total: 2,
+      files: 2,
+      matches: [
+        { path: path.join(tmp, "src", "index.ts"), matches: [{ line: 1, text: 'export const main = () => "hello"' }] },
+        { path: path.join(tmp, "src", "utils.ts"), matches: [{ line: 1, text: "export const add = (a: number, b: number) => a + b" }] },
+      ],
+    })
   })
 
   it("skips binary files", async () => {
@@ -523,12 +537,18 @@ describe("grep tool", () => {
 
   it("returns no matches message", async () => {
     const result = await tools.grep({ pattern: "zzzznotfound", path: tmp })
-    expect(result).toBe("No matches found")
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "zzzznotfound",
+      total: 0,
+      files: 0,
+      matches: [],
+    })
   })
 
   it("sorts matching files by most recently modified first", async () => {
     const result = await tools.grep({ pattern: "foo", path: tmp })
-    expect(parseGrep(result).map((file) => file.path)).toEqual([
+    expect(parseGrep(result).matches.map((file) => file.path)).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "search-me.ts"),
     ])
@@ -536,16 +556,22 @@ describe("grep tool", () => {
 
   it("groups multiple matches from the same file under one header", async () => {
     const result = await tools.grep({ pattern: "foo", path: tmp, include: ["multi-match.ts"] })
-    expect(parseGrep(result)).toEqual([
-      {
-        path: path.join(tmp, "multi-match.ts"),
-        matches: [
-          { line: 1, text: "foo one" },
-          { line: 2, text: "foo two" },
-          { line: 3, text: "foo three" },
-        ],
-      },
-    ])
+    expect(parseGrep(result)).toEqual({
+      path: tmp,
+      pattern: "foo",
+      total: 3,
+      files: 1,
+      matches: [
+        {
+          path: path.join(tmp, "multi-match.ts"),
+          matches: [
+            { line: 1, text: "foo one" },
+            { line: 2, text: "foo two" },
+            { line: 3, text: "foo three" },
+          ],
+        },
+      ],
+    })
   })
 
   it("returns error for invalid regex", async () => {

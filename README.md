@@ -76,6 +76,7 @@ Notes:
 - searches everywhere under `path`
 - matching files are ordered by most recently modified first
 - matches are grouped by file path
+- successful responses include structured match metadata
 - skips binary files
 - skips the following special system paths:
   - `/dev`

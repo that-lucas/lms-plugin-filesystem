@@ -116,33 +116,33 @@ describe("path outside base directory", () => {
 
 describe("grep special system paths", () => {
   it("skips /dev", async () => {
-    expect(await rootTools.grep({ pattern: ".*", path: "/dev" })).toBe("No matches found")
+    expect(await rootTools.grep({ pattern: ".*", path: "/dev" })).toContain('<matches total="0" files="0">')
   })
 
   it("skips /proc", async () => {
     const result = await rootTools.grep({ pattern: ".*", path: "/proc" })
-    expect(["No files found", "Error: Directory not found: /proc"]).toContain(result)
+    expect(result.includes('<matches total="0" files="0">') || result === "Error: Directory not found: /proc").toBe(true)
   })
 
   it("skips /sys", async () => {
     const result = await rootTools.grep({ pattern: ".*", path: "/sys" })
-    expect(["No files found", "Error: Directory not found: /sys"]).toContain(result)
+    expect(result.includes('<matches total="0" files="0">') || result === "Error: Directory not found: /sys").toBe(true)
   })
 
   it("skips /run", async () => {
     const result = await rootTools.grep({ pattern: ".*", path: "/run" })
-    expect(["No files found", "Error: Directory not found: /run"]).toContain(result)
+    expect(result.includes('<matches total="0" files="0">') || result === "Error: Directory not found: /run").toBe(true)
   })
 
   it("skips /var/run", async () => {
-    expect(await rootTools.grep({ pattern: ".*", path: "/var/run" })).toBe("No matches found")
+    expect(await rootTools.grep({ pattern: ".*", path: "/var/run" })).toContain('<matches total="0" files="0">')
   })
 
   it("skips /private/var/run", async () => {
-    expect(await rootTools.grep({ pattern: ".*", path: "/private/var/run" })).toBe("No matches found")
+    expect(await rootTools.grep({ pattern: ".*", path: "/private/var/run" })).toContain('<matches total="0" files="0">')
   })
 
   it("skips /Volumes", async () => {
-    expect(await rootTools.grep({ pattern: ".*", path: "/Volumes" })).toBe("No matches found")
+    expect(await rootTools.grep({ pattern: ".*", path: "/Volumes" })).toContain('<matches total="0" files="0">')
   })
 })
