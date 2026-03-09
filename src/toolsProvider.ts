@@ -300,5 +300,71 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }),
   )
 
+  tools.push(
+    tool({
+      name: "edit",
+      description:
+        "Edit an existing file by applying one or more exact text replacements in order from an absolute or home-relative path. Fails if a replacement is missing, ambiguous, or would not change the file.",
+      parameters: {
+        path: z.string().describe("Absolute or home-relative path (e.g., /Users/john/file.ext, ~/path/to/file.ext)"),
+        edits: z
+          .array(
+            z.object({
+              oldString: z.string().describe("Exact text to replace"),
+              newString: z.string().describe("Replacement text"),
+              replaceAll: z.boolean().optional().describe("Replace all matches of oldString. Defaults to false."),
+            }),
+          )
+          .min(1)
+          .describe("One or more exact text replacements to apply in order"),
+        encoding: z.enum(["utf8"]).optional().describe("File encoding. Defaults to utf8."),
+      },
+      implementation: async ({ path: input, edits }) => {
+        const base = baseDir()
+        const file = resolveInputPath(base, input)
+        if (file.startsWith("Error:")) return file
+
+        const stat = await fs.stat(file).catch(() => undefined)
+        if (!stat) return `Error: File not found: ${file}`
+        if (stat.isDirectory()) return `Error: ${file} is a directory. The edit tool only works on files.`
+        if (await binary(file)) return `Error: Cannot edit binary file: ${file}`
+
+        const countMatches = (body: string, needle: string) => {
+          let count = 0
+          let index = 0
+          while (true) {
+            const found = body.indexOf(needle, index)
+            if (found === -1) return count
+            count += 1
+            index = found + needle.length
+          }
+        }
+
+        let body = await fs.readFile(file, "utf8")
+        for (const edit of edits) {
+          if (edit.oldString.length === 0) return 'Error: Parameter "oldString" must not be empty'
+          if (edit.oldString === edit.newString) return "Error: oldString and newString must be different"
+
+          const matches = countMatches(body, edit.oldString)
+          if (matches === 0) return `Error: oldString not found: ${file}`
+          if (matches > 1 && edit.replaceAll !== true) {
+            return `Error: oldString matched ${matches} times in file: ${file}. Use replaceAll to edit all matches.`
+          }
+
+          if (edit.replaceAll) {
+            body = body.split(edit.oldString).join(edit.newString)
+            continue
+          }
+
+          const index = body.indexOf(edit.oldString)
+          body = body.slice(0, index) + edit.newString + body.slice(index + edit.oldString.length)
+        }
+
+        await fs.writeFile(file, body, "utf8")
+        return `Edited file: ${relPath(base, file)} (${edits.length} edits)`
+      },
+    }),
+  )
+
   return tools
 }

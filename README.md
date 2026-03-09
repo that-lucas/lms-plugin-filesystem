@@ -100,5 +100,21 @@ Create a new file or directory.
 
 Notes:
 
-- parent directories are always created automatically for files
 - parameters that don't apply to the chosen type are rejected if set to a non-default value
+
+### `edit`
+
+Edit an existing file with exact text replacements.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path` | string | - | Absolute or home-relative path (e.g., `/Users/john/file.ext`, `~/path/to/file.ext`) |
+| `edits` | `{ oldString, newString, replaceAll? }[]` | - | One or more exact text replacements to apply in order |
+| `encoding` | `utf8` | `utf8` | File encoding |
+
+Notes:
+
+- edits only existing files
+- edits run in order
+- `replaceAll` is required when `oldString` matches more than once
+- `newString` may be empty

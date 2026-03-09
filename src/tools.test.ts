@@ -599,3 +599,177 @@ describe("create tool", () => {
     expect(result).toContain("Error:")
   })
 })
+
+// ---------------------------------------------------------------------------
+// edit
+// ---------------------------------------------------------------------------
+describe("edit tool", () => {
+  it("edits a file with one unique replacement", async () => {
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "beta", newString: "delta" }],
+    })
+    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("alpha\ndelta\ngamma\n")
+  })
+
+  it("applies multiple edits in order", async () => {
+    const target = path.join(tmp, "edit-chain.txt")
+    await fs.writeFile(target, "start middle end\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [
+        { oldString: "middle", newString: "center" },
+        { oldString: "center end", newString: "finish" },
+      ],
+    })
+    expect(result).toBe("Edited file: edit-chain.txt (2 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("start finish\n")
+  })
+
+  it("replaces all matches when replaceAll is true", async () => {
+    const target = path.join(tmp, "edit-many.txt")
+    await fs.writeFile(target, "foo\nfoo\nfoo\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "foo", newString: "bar", replaceAll: true }],
+    })
+    expect(result).toBe("Edited file: edit-many.txt (1 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("bar\nbar\nbar\n")
+  })
+
+  it("allows newString to be empty", async () => {
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "beta\n", newString: "" }],
+    })
+    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("alpha\ngamma\n")
+  })
+
+  it("can empty a file by replacing the full content with an empty string", async () => {
+    const target = path.join(tmp, "edit-empty-target.txt")
+    await fs.writeFile(target, "erase me\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "erase me\n", newString: "" }],
+    })
+    expect(result).toBe("Edited file: edit-empty-target.txt (1 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("")
+  })
+
+  it("returns error when oldString is empty", async () => {
+    await fs.writeFile(path.join(tmp, "edit-one.txt"), "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: path.join(tmp, "edit-one.txt"),
+      edits: [{ oldString: "", newString: "delta" }],
+    })
+    expect(result).toBe('Error: Parameter "oldString" must not be empty')
+  })
+
+  it("returns error when oldString and newString are identical", async () => {
+    await fs.writeFile(path.join(tmp, "edit-one.txt"), "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: path.join(tmp, "edit-one.txt"),
+      edits: [{ oldString: "beta", newString: "beta" }],
+    })
+    expect(result).toBe("Error: oldString and newString must be different")
+  })
+
+  it("returns error when oldString is not found", async () => {
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "missing", newString: "delta" }],
+    })
+    expect(result).toBe(`Error: oldString not found: ${target}`)
+  })
+
+  it("returns error when multiple matches exist and replaceAll is not true", async () => {
+    const target = path.join(tmp, "edit-many.txt")
+    await fs.writeFile(target, "foo\nfoo\nfoo\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "foo", newString: "bar" }],
+    })
+    expect(result).toBe(`Error: oldString matched 3 times in file: ${target}. Use replaceAll to edit all matches.`)
+  })
+
+  it("keeps the file unchanged when a later edit fails", async () => {
+    const target = path.join(tmp, "edit-chain.txt")
+    const original = "start middle end\n"
+    await fs.writeFile(target, original)
+    const result = await tools.edit({
+      path: target,
+      edits: [
+        { oldString: "middle", newString: "center" },
+        { oldString: "missing", newString: "unused" },
+      ],
+    })
+    expect(result).toBe(`Error: oldString not found: ${target}`)
+    expect(await fs.readFile(target, "utf8")).toBe(original)
+  })
+
+  it("returns error when file does not exist", async () => {
+    const target = path.join(tmp, "no-edit.txt")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "a", newString: "b" }],
+    })
+    expect(result).toBe(`Error: File not found: ${target}`)
+  })
+
+  it("returns error when path is a directory", async () => {
+    const target = path.join(tmp, "src")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "a", newString: "b" }],
+    })
+    expect(result).toBe(`Error: ${target} is a directory. The edit tool only works on files.`)
+  })
+
+  it("returns error for binary file", async () => {
+    const target = path.join(tmp, "data.bin")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "a", newString: "b" }],
+    })
+    expect(result).toBe(`Error: Cannot edit binary file: ${target}`)
+  })
+
+  it("returns error for path outside base directory", async () => {
+    const result = await tools.edit({
+      path: "/tmp/escape.txt",
+      edits: [{ oldString: "a", newString: "b" }],
+    })
+    expect(result).toContain("Error:")
+  })
+
+  it("uses utf8 by default", async () => {
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "alpha", newString: "omega" }],
+    })
+    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("omega\nbeta\ngamma\n")
+  })
+
+  it("accepts encoding utf8 explicitly", async () => {
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({
+      path: target,
+      edits: [{ oldString: "gamma", newString: "theta" }],
+      encoding: "utf8",
+    })
+    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
+    expect(await fs.readFile(target, "utf8")).toBe("alpha\nbeta\ntheta\n")
+  })
+})
