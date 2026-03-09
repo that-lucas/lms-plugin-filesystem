@@ -1,0 +1,27 @@
+{
+  "name": "filesystem",
+  "version": "0.0.1",
+  "description": "Filesystem tools for LM Studio: read, list, glob, and grep",
+  "main": "index.js",
+  "scripts": {
+    "dev": "lms dev",
+    "push": "lms push",
+    "test": "vitest run"
+  },
+  "author": "Lucas",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/that-lucas/lms-plugin-filesystem.git"
+  },
+  "dependencies": {
+    "@lmstudio/sdk": "^1.4.0",
+    "minimatch": "^10.0.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.8",
+    "typescript": "^5.8.2",
+    "vitest": "^4.0.18"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "type": "plugin",
+  "runner": "node",
+  "owner": "that-lucas",
+  "name": "filesystem",
+  "revision": 2
+}

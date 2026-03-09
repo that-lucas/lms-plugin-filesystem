@@ -1,0 +1,203 @@
+import * as fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { Minimatch } from "minimatch"
+
+export const READ_LIMIT = 2000
+export const FILE_LIMIT = 100
+export const DEFAULT_IGNORES = [
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "target",
+  "vendor",
+  "bin",
+  "obj",
+  ".idea",
+  ".vscode",
+  ".zig-cache",
+  "zig-out",
+  ".coverage",
+  "coverage",
+  "tmp",
+  "temp",
+  ".cache",
+  "cache",
+  "logs",
+  ".venv",
+  "venv",
+  "env",
+]
+export const SYSTEM_IGNORES = ["/dev", "/proc", "/sys", "/run", "/var/run", "/private/var/run", "/Volumes"]
+export const BINARY_EXT = new Set([
+  ".zip",
+  ".tar",
+  ".gz",
+  ".exe",
+  ".dll",
+  ".so",
+  ".class",
+  ".jar",
+  ".war",
+  ".7z",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".odt",
+  ".ods",
+  ".odp",
+  ".bin",
+  ".dat",
+  ".obj",
+  ".o",
+  ".a",
+  ".lib",
+  ".wasm",
+  ".pyc",
+  ".pyo",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".ico",
+  ".pdf",
+])
+
+export type Item = {
+  path: string
+  dir: boolean
+}
+
+export type WalkOptions = {
+  ignore?: string[]
+  include?: string[]
+  exclude?: string[]
+  recursive?: boolean
+  type?: "all" | "files" | "directories"
+}
+
+export const expandHome = (input: string) => {
+  if (input === "~") return os.homedir()
+  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2))
+  return input
+}
+
+export const resolvePath = (base: string, input?: string) => {
+  const full = path.resolve(base, expandHome(input || "."))
+  const rel = path.relative(base, full)
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Error: Path is outside the configured base directory: ${full}`)
+  }
+  return full
+}
+
+export const relPath = (base: string, target: string) => path.relative(base, target).split(path.sep).join("/") || "."
+
+export const compile = (patterns?: string[]) => (patterns || []).map((item) => new Minimatch(item, { dot: true, nocase: true }))
+
+export const ignored = (rel: string, name: string, matchers: Minimatch[]) => {
+  const parts = rel.split("/")
+  if (parts.some((part) => DEFAULT_IGNORES.includes(part))) return true
+  if (matchers.some((item) => item.match(rel) || item.match(name))) return true
+  return false
+}
+
+export const isSystemPath = (file: string) =>
+  SYSTEM_IGNORES.some((item) => file === item || file.startsWith(item + "/"))
+
+export const blocked = (file: string, base: string) => {
+  if (base !== "/" && !isSystemPath(base)) return false
+  return isSystemPath(file)
+}
+
+export const walk = async (base: string, opts?: WalkOptions) => {
+  const out: Item[] = []
+  const skip = compile(opts?.ignore)
+  const include = compile(opts?.include)
+  const exclude = compile(opts?.exclude)
+  const recursive = opts?.recursive ?? true
+  const type = opts?.type ?? "all"
+
+  const visit = async (dir: string) => {
+    if (blocked(dir, base)) return
+    const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+    items.sort((a, b) => a.name.localeCompare(b.name))
+    for (const item of items) {
+      const full = path.join(dir, item.name)
+      if (blocked(full, base)) continue
+      const rel = relPath(base, full)
+      if (ignored(rel, item.name, skip)) continue
+      if (item.isDirectory()) {
+        if (type !== "files") out.push({ path: full, dir: true })
+        if (recursive) await visit(full)
+        continue
+      }
+      const stat = await fs.lstat(full).catch(() => undefined)
+      if (!stat || stat.isSymbolicLink() || !stat.isFile()) continue
+      if (exclude.some((pattern) => pattern.match(rel) || pattern.match(item.name))) continue
+      if (include.length > 0 && !include.some((pattern) => pattern.match(rel) || pattern.match(item.name))) continue
+      if (type !== "directories") out.push({ path: full, dir: false })
+    }
+  }
+
+  await visit(base)
+  return out
+}
+
+export const binary = async (file: string) => {
+  if (BINARY_EXT.has(path.extname(file).toLowerCase())) return true
+  const stat = await fs.stat(file)
+  if (stat.size === 0) return false
+  const fd = await fs.open(file, "r")
+  try {
+    const size = Math.min(4096, stat.size)
+    const buf = Buffer.alloc(size)
+    const res = await fd.read(buf, 0, size, 0)
+    if (res.bytesRead === 0) return false
+    let count = 0
+    for (let i = 0; i < res.bytesRead; i++) {
+      if (buf[i] === 0) return true
+      if (buf[i] < 9 || (buf[i] > 13 && buf[i] < 32)) count += 1
+    }
+    return count / res.bytesRead > 0.3
+  } finally {
+    await fd.close()
+  }
+}
+
+export const formatTree = (base: string, items: Item[]) => {
+  const dirs = new Set<string>(["."])
+  const byDir = new Map<string, string[]>()
+  for (const item of items) {
+    const rel = relPath(base, item.path)
+    const dir = path.dirname(rel)
+    const parts = dir === "." ? [] : dir.split("/")
+    for (let i = 0; i <= parts.length; i++) {
+      dirs.add(i === 0 ? "." : parts.slice(0, i).join("/"))
+    }
+    if (!item.dir) {
+      const key = dir === "" ? "." : dir
+      byDir.set(key, [...(byDir.get(key) || []), path.basename(rel)])
+      continue
+    }
+    dirs.add(rel)
+  }
+
+  const render = (dir: string, depth: number): string[] => {
+    const out: string[] = []
+    if (depth > 0) out.push(`${"  ".repeat(depth)}${path.basename(dir)}/`)
+    const kids = [...dirs].filter((item) => item !== dir && path.dirname(item) === dir).sort((a, b) => a.localeCompare(b))
+    for (const kid of kids) out.push(...render(kid, depth + 1))
+    const indent = "  ".repeat(depth + 1)
+    for (const file of (byDir.get(dir) || []).sort((a, b) => a.localeCompare(b))) out.push(`${indent}${file}`)
+    return out
+  }
+
+  return [`${base}/`, ...render(".", 0)].join("\n")
+}
