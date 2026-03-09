@@ -19,6 +19,7 @@ Read a file.
 Notes:
 
 - file output is line-numbered
+- successful responses include structured pagination metadata
 - binary files and directory paths are not supported
 
 ### `list`
@@ -37,6 +38,7 @@ List entries in a directory.
 Notes:
 
 - recursive mode returns a compact tree view
+- successful responses include structured pagination metadata
 
 ### `glob`
 
@@ -56,6 +58,7 @@ Notes:
 
 - searches recursively
 - entries are sorted by most recently modified first
+- successful responses include structured pagination metadata
 
 ### `grep`
 

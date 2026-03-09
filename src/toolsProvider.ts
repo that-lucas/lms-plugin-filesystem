@@ -79,17 +79,20 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           return `Error: Offset ${offset} is out of range for this file (${total} lines)`
         }
 
-        const lines = raw.map((line, index) => `${index + (offset || 1)}: ${line}`)
-        const last = (offset || 1) + raw.length - 1
-        const next = last + 1
+        const startOffset = offset || 1
+        const lines = raw.map((line, index) => `${index + startOffset}: ${line}`)
+        const hasMore = truncated
+        const next = startOffset + raw.length
         return [
           `<path>${file}</path>`,
           `<type>file</type>`,
+          `<offset>${startOffset}</offset>`,
+          `<limit>${raw.length}</limit>`,
+          `<total>${total}</total>`,
+          `<has_more>${hasMore}</has_more>`,
+          ...(hasMore ? [`<next_offset>${next}</next_offset>`] : []),
           `<content>`,
           lines.join("\n"),
-          truncated
-            ? `\n\n(Showing lines ${offset || 1}-${last} of ${total}. Use offset=${next} to continue.)`
-            : `\n\n(End of file - total ${total} lines)`,
           `</content>`,
         ].join("\n")
       },
@@ -131,8 +134,19 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (found.length < (offset ?? 1) && !(found.length === 0 && (offset ?? 1) === 1)) {
           return `Error: Offset ${offset} is out of range for this listing (${found.length} entries)`
         }
-        if (start + slice.length >= found.length) return `${out}\n\n(Showing ${slice.length} of ${found.length} entries)`
-        return `${out}\n\n(Showing entries ${start + 1}-${start + slice.length} of ${found.length}. Use offset=${start + slice.length + 1} to continue.)`
+        const hasMore = start + slice.length < found.length
+        return [
+          `<path>${dir}</path>`,
+          `<type>directory</type>`,
+          `<offset>${offset ?? 1}</offset>`,
+          `<limit>${slice.length}</limit>`,
+          `<total>${found.length}</total>`,
+          `<has_more>${hasMore}</has_more>`,
+          ...(hasMore ? [`<next_offset>${start + slice.length + 1}</next_offset>`] : []),
+          `<entries>`,
+          out,
+          `</entries>`,
+        ].join("\n")
       },
     }),
   )
@@ -171,14 +185,25 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           })),
         )
         files.sort((a, b) => b.time - a.time)
-        if (files.length === 0) return "No entries found"
         if (files.length < (offset ?? 1) && !(files.length === 0 && (offset ?? 1) === 1)) {
           return `Error: Offset ${offset} is out of range for these entries (${files.length} total)`
         }
         const slice = files.slice(start, start + size)
         const lines = slice.map((item) => item.path)
-        if (start + slice.length >= files.length) return `${lines.join("\n")}\n\n(Showing ${slice.length} of ${files.length} entries)`
-        return `${lines.join("\n")}\n\n(Showing entries ${start + 1}-${start + slice.length} of ${files.length}. Use offset=${start + slice.length + 1} to continue.)`
+        const hasMore = start + slice.length < files.length
+        return [
+          `<path>${dir}</path>`,
+          `<type>${kind}</type>`,
+          `<pattern>${pattern}</pattern>`,
+          `<offset>${offset ?? 1}</offset>`,
+          `<limit>${slice.length}</limit>`,
+          `<total>${files.length}</total>`,
+          `<has_more>${hasMore}</has_more>`,
+          ...(hasMore ? [`<next_offset>${start + slice.length + 1}</next_offset>`] : []),
+          `<entries>`,
+          lines.join("\n"),
+          `</entries>`,
+        ].join("\n")
       },
     }),
   )

@@ -7,11 +7,22 @@ import { toolsProvider } from "./toolsProvider"
 let tmp: string
 let tools: Record<string, (params: any) => Promise<string>>
 
-const splitBody = (output: string) => output.split("\n\n(")[0]
+const mustTag = (output: string, name: string) => {
+  const match = output.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))
+  if (!match) throw new Error(`Missing tag: ${name}`)
+  return match[1]
+}
 
-const listLines = (output: string) => splitBody(output).split("\n")
+const optionalTag = (output: string, name: string) => {
+  const match = output.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))
+  return match ? match[1] : undefined
+}
 
-const pathLines = (output: string) => splitBody(output).split("\n").filter(Boolean)
+const blockLines = (output: string, name: string) => {
+  const body = mustTag(output, name).replace(/^\n/, "").replace(/\n$/, "")
+  if (body.length === 0) return []
+  return body.split("\n")
+}
 
 const parseGrep = (output: string) => {
   const files: Array<{ path: string; matches: Array<{ line: number; text: string }> }> = []
@@ -34,21 +45,40 @@ const parseGrep = (output: string) => {
 }
 
 const parseRead = (output: string) => {
-  const pathMatch = output.match(/<path>(.*)<\/path>/)
-  const typeMatch = output.match(/<type>(.*)<\/type>/)
-  const contentMatch = output.match(/<content>\n([\s\S]*)\n<\/content>/)
-  if (!pathMatch || !typeMatch || !contentMatch) throw new Error("Invalid read output")
-  const body = contentMatch[1]
-  const parts = body.split("\n\n")
-  const lines = parts[0] ? parts[0].split("\n") : []
-  const footer = parts.slice(1).join("\n\n")
   return {
-    path: pathMatch[1],
-    type: typeMatch[1],
-    lines,
-    footer: footer.trim(),
+    path: mustTag(output, "path"),
+    type: mustTag(output, "type"),
+    offset: Number(mustTag(output, "offset")),
+    limit: Number(mustTag(output, "limit")),
+    total: Number(mustTag(output, "total")),
+    hasMore: mustTag(output, "has_more") === "true",
+    nextOffset: optionalTag(output, "next_offset") ? Number(optionalTag(output, "next_offset")) : undefined,
+    lines: blockLines(output, "content"),
   }
 }
+
+const parseList = (output: string) => ({
+  path: mustTag(output, "path"),
+  type: mustTag(output, "type"),
+  offset: Number(mustTag(output, "offset")),
+  limit: Number(mustTag(output, "limit")),
+  total: Number(mustTag(output, "total")),
+  hasMore: mustTag(output, "has_more") === "true",
+  nextOffset: optionalTag(output, "next_offset") ? Number(optionalTag(output, "next_offset")) : undefined,
+  entries: blockLines(output, "entries"),
+})
+
+const parseGlob = (output: string) => ({
+  path: mustTag(output, "path"),
+  type: mustTag(output, "type"),
+  pattern: mustTag(output, "pattern"),
+  offset: Number(mustTag(output, "offset")),
+  limit: Number(mustTag(output, "limit")),
+  total: Number(mustTag(output, "total")),
+  hasMore: mustTag(output, "has_more") === "true",
+  nextOffset: optionalTag(output, "next_offset") ? Number(optionalTag(output, "next_offset")) : undefined,
+  entries: blockLines(output, "entries").filter(Boolean),
+})
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-tools-"))
@@ -133,8 +163,12 @@ describe("read tool", () => {
     expect(parseRead(result)).toEqual({
       path: path.join(tmp, "hello.txt"),
       type: "file",
+      offset: 1,
+      limit: 5,
+      total: 5,
+      hasMore: false,
+      nextOffset: undefined,
       lines: ["1: line 1", "2: line 2", "3: line 3", "4: line 4", "5: line 5"],
-      footer: "(End of file - total 5 lines)",
     })
   })
 
@@ -143,8 +177,12 @@ describe("read tool", () => {
     expect(parseRead(result)).toEqual({
       path: path.join(tmp, "big.txt"),
       type: "file",
+      offset: 10,
+      limit: 5,
+      total: 100,
+      hasMore: true,
+      nextOffset: 15,
       lines: ["10: line 10", "11: line 11", "12: line 12", "13: line 13", "14: line 14"],
-      footer: "(Showing lines 10-14 of 100. Use offset=15 to continue.)",
     })
   })
 
@@ -174,8 +212,12 @@ describe("read tool", () => {
     expect(parseRead(result)).toEqual({
       path: path.join(tmp, "empty.txt"),
       type: "file",
+      offset: 1,
+      limit: 0,
+      total: 0,
+      hasMore: false,
+      nextOffset: undefined,
       lines: [],
-      footer: "(End of file - total 0 lines)",
     })
   })
 })
@@ -200,7 +242,15 @@ describe("list tool", () => {
 
   it("lists recursively with tree format", async () => {
     const result = await tools.list({ path: tmp, recursive: true })
-    expect(listLines(result)).toEqual([
+    expect(parseList(result)).toEqual({
+      path: tmp,
+      type: "directory",
+      offset: 1,
+      limit: 13,
+      total: 13,
+      hasMore: false,
+      nextOffset: undefined,
+      entries: [
       `${tmp}/`,
       "  src/",
       "    existing-dir/",
@@ -215,7 +265,8 @@ describe("list tool", () => {
       "  hello.txt",
       "  multi-match.ts",
       "  search-me.ts",
-    ])
+      ],
+    })
   })
 
   it("filters by type: files", async () => {
@@ -255,11 +306,16 @@ describe("list tool", () => {
 
   it("supports pagination", async () => {
     const result = await tools.list({ path: tmp, limit: 2 })
-    expect(listLines(result)).toEqual([
-      `${tmp}/`,
-      "  big.txt",
-      "  data.bin",
-    ])
+    expect(parseList(result)).toEqual({
+      path: tmp,
+      type: "directory",
+      offset: 1,
+      limit: 2,
+      total: 7,
+      hasMore: true,
+      nextOffset: 3,
+      entries: [`${tmp}/`, "  big.txt", "  data.bin"],
+    })
   })
 })
 
@@ -269,28 +325,54 @@ describe("list tool", () => {
 describe("glob tool", () => {
   it("matches files by pattern", async () => {
     const result = await tools.glob({ pattern: "*.txt", path: tmp })
-    expect(pathLines(result)).toEqual([
-      path.join(tmp, "big.txt"),
-      path.join(tmp, "empty.txt"),
-      path.join(tmp, "hello.txt"),
-    ])
+    expect(parseGlob(result)).toEqual({
+      path: tmp,
+      type: "files",
+      pattern: "*.txt",
+      offset: 1,
+      limit: 3,
+      total: 3,
+      hasMore: false,
+      nextOffset: undefined,
+      entries: [path.join(tmp, "big.txt"), path.join(tmp, "empty.txt"), path.join(tmp, "hello.txt")],
+    })
   })
 
   it("matches nested files with **", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp })
-    expect(pathLines(result)).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "src", "index.ts"),
-      path.join(tmp, "src", "existing.ts"),
-      path.join(tmp, "src", "utils.ts"),
-      path.join(tmp, "src", "lib", "helper.ts"),
-      path.join(tmp, "search-me.ts"),
-    ])
+    expect(parseGlob(result)).toEqual({
+      path: tmp,
+      type: "files",
+      pattern: "**/*.ts",
+      offset: 1,
+      limit: 6,
+      total: 6,
+      hasMore: false,
+      nextOffset: undefined,
+      entries: [
+        path.join(tmp, "multi-match.ts"),
+        path.join(tmp, "src", "index.ts"),
+        path.join(tmp, "src", "existing.ts"),
+        path.join(tmp, "src", "utils.ts"),
+        path.join(tmp, "src", "lib", "helper.ts"),
+        path.join(tmp, "search-me.ts"),
+      ],
+    })
   })
 
   it("returns no results message for unmatched pattern", async () => {
     const result = await tools.glob({ pattern: "*.xyz", path: tmp })
-    expect(result).toBe("No entries found")
+    expect(parseGlob(result)).toEqual({
+      path: tmp,
+      type: "files",
+      pattern: "*.xyz",
+      offset: 1,
+      limit: 0,
+      total: 0,
+      hasMore: false,
+      nextOffset: undefined,
+      entries: [],
+    })
   })
 
   it("respects type filter for directories", async () => {
@@ -301,7 +383,7 @@ describe("glob tool", () => {
 
   it("respects include filter", async () => {
     const result = await tools.glob({ pattern: "**/*", path: tmp, include: ["*.ts"] })
-    expect(pathLines(result)).toEqual([
+    expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
       path.join(tmp, "src", "existing.ts"),
@@ -313,7 +395,7 @@ describe("glob tool", () => {
 
   it("respects exclude filter", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, exclude: ["src/lib/**"] })
-    expect(pathLines(result)).toEqual([
+    expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
       path.join(tmp, "src", "existing.ts"),
@@ -329,15 +411,22 @@ describe("glob tool", () => {
 
   it("supports pagination", async () => {
     const result = await tools.glob({ pattern: "**/*", path: tmp, limit: 2 })
-    expect(pathLines(result)).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "big.txt"),
-    ])
+    expect(parseGlob(result)).toEqual({
+      path: tmp,
+      type: "files",
+      pattern: "**/*",
+      offset: 1,
+      limit: 2,
+      total: 10,
+      hasMore: true,
+      nextOffset: 3,
+      entries: [path.join(tmp, "multi-match.ts"), path.join(tmp, "big.txt")],
+    })
   })
 
   it("sorts matches by most recently modified first", async () => {
     const result = await tools.glob({ pattern: "*.txt", path: tmp })
-    expect(pathLines(result)).toEqual([
+    expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "big.txt"),
       path.join(tmp, "empty.txt"),
       path.join(tmp, "hello.txt"),
