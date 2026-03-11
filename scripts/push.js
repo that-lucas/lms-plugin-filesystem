@@ -24,8 +24,9 @@ const copyIfExists = async (relativePath, targetRoot) => {
   try {
     const stat = await fs.stat(sourcePath)
     if (!stat.isFile()) return
-  } catch {
-    return
+  } catch (error) {
+    if (error?.code === "ENOENT") return
+    throw error
   }
 
   const targetPath = path.join(targetRoot, relativePath)
@@ -90,7 +91,7 @@ async function main() {
     const args = process.argv.slice(2)
     const exitCode = await runPush(tempRoot, args)
 
-    if (args.includes("--write-revision")) {
+    if (exitCode === 0 && args.includes("--write-revision")) {
       await syncManifestBack(tempRoot)
     }
 
