@@ -20,8 +20,8 @@ Run from the repository root.
 - `npm install` - install dependencies
 - `npm run dev` - start local LM Studio plugin development
 - `npm test` - run the test suite
-- `npm run push` - publish with `lms push`
-- `lms push --write-revision --description "..."` - publish and update the Hub revision description when needed; use this instead of `npm run push` when the revision description should be updated
+- `npm run push` - publish a filtered runtime-only artifact with `lms push`
+- `npm run push -- --write-revision --description "..."` - publish the same filtered runtime-only artifact and update the Hub revision description when needed
 
 ## Working rules
 

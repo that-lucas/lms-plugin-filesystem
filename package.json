@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "lms dev",
-    "push": "lms push",
+    "push": "node scripts/push.js",
     "test": "vitest run"
   },
   "author": "Lucas",
