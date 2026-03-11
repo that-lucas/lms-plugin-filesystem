@@ -5,6 +5,7 @@ import path from "node:path"
 import { toolsProvider } from "./toolsProvider"
 
 let tmp: string
+let outsideTmp: string
 let tools: Record<string, (params: any) => Promise<string>>
 
 type FlatRecord = {
@@ -134,12 +135,16 @@ const parseEdit = (output: string) => parseFlat(output).fields
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-tools-"))
+  outsideTmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-tools-outside-"))
 
   await fs.writeFile(path.join(tmp, "hello.txt"), "line 1\nline 2\nline 3\nline 4\nline 5\n")
   await fs.writeFile(path.join(tmp, "empty.txt"), "")
   await fs.writeFile(path.join(tmp, "search-me.ts"), 'const foo = "bar"\nconst baz = "qux"\nfoo()\n')
   await fs.writeFile(path.join(tmp, "multi-match.ts"), "foo one\nfoo two\nfoo three\n")
   await fs.writeFile(path.join(tmp, "literal.txt"), "#header: value\n<tag>\n\nplain text\n")
+  await fs.writeFile(path.join(outsideTmp, "outside-read.txt"), "outside\n")
+  await fs.writeFile(path.join(outsideTmp, "outside-edit.txt"), "outside edit\n")
+  await fs.writeFile(path.join(outsideTmp, "outside-write.txt"), "outside write\n")
 
   await fs.mkdir(path.join(tmp, "src"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "index.ts"), 'export const main = () => "hello"\n')
@@ -148,6 +153,10 @@ beforeAll(async () => {
   await fs.writeFile(path.join(tmp, "src", "lib", "helper.ts"), "export function help() {}\n")
   await fs.writeFile(path.join(tmp, "src", "existing.ts"), "existing\n")
   await fs.mkdir(path.join(tmp, "src", "existing-dir"), { recursive: true })
+  await fs.symlink(path.join(outsideTmp, "outside-read.txt"), path.join(tmp, "read-link.txt"))
+  await fs.symlink(path.join(outsideTmp, "outside-edit.txt"), path.join(tmp, "edit-link.txt"))
+  await fs.symlink(path.join(outsideTmp, "outside-write.txt"), path.join(tmp, "write-link.txt"))
+  await fs.symlink(outsideTmp, path.join(tmp, "linked-outside-dir"))
 
   const buf = Buffer.alloc(64)
   buf[0] = 0
@@ -198,6 +207,7 @@ beforeEach(() => {
 afterAll(async () => {
   delete process.env.LMS_FILESYSTEM_IGNORE_PATHS
   await fs.rm(tmp, { recursive: true, force: true })
+  await fs.rm(outsideTmp, { recursive: true, force: true })
 })
 
 describe("read tool", () => {
@@ -262,6 +272,15 @@ describe("read tool", () => {
     expect(parseError(result)).toMatchObject({
       code: "binary_file",
       path: path.join(tmp, "data.bin"),
+    })
+  })
+
+  it("returns error for symbolic links", async () => {
+    const result = await tools.read({ filePath: path.join(tmp, "read-link.txt") })
+    expect(parseError(result)).toMatchObject({
+      code: "wrong_type",
+      actual: "symlink",
+      path: path.join(tmp, "read-link.txt"),
     })
   })
 
@@ -688,6 +707,25 @@ describe("create tool", () => {
     })
   })
 
+  it("returns error when file target is a symbolic link", async () => {
+    const target = path.join(tmp, "write-link.txt")
+    const result = await tools.create({ type: "file", path: target, content: "new", overwrite: true })
+    expect(parseError(result)).toMatchObject({
+      code: "wrong_type",
+      actual: "symlink",
+      path: target,
+    })
+  })
+
+  it("returns error when file parent resolves outside base through a symlink", async () => {
+    const target = path.join(tmp, "linked-outside-dir", "new.txt")
+    const result = await tools.create({ type: "file", path: target, content: "new" })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
+      path: target,
+    })
+  })
+
   it("creates a new directory", async () => {
     const target = path.join(tmp, "new-dir")
     const result = await tools.create({ type: "directory", path: target })
@@ -887,6 +925,16 @@ describe("edit tool", () => {
     const target = path.join(tmp, "data.bin")
     const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
     expect(parseError(result).code).toBe("binary_file")
+  })
+
+  it("returns error for symbolic links", async () => {
+    const target = path.join(tmp, "edit-link.txt")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
+    expect(parseError(result)).toMatchObject({
+      code: "wrong_type",
+      actual: "symlink",
+      path: target,
+    })
   })
 
   it("returns error for path outside base directory", async () => {

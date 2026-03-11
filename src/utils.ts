@@ -84,6 +84,16 @@ export type WalkOptions = {
 
 export const IGNORE_PATHS_ENV = "LMS_FILESYSTEM_IGNORE_PATHS"
 
+export class PathOutsideBaseError extends Error {
+  filePath: string
+
+  constructor(filePath: string) {
+    super(`Path is outside the configured base directory: ${filePath}`)
+    this.name = "PathOutsideBaseError"
+    this.filePath = filePath
+  }
+}
+
 export const expandHome = (input: string) => {
   if (input === "~") return os.homedir()
   if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2))
@@ -94,7 +104,7 @@ export const resolvePath = (base: string, input?: string) => {
   const full = path.resolve(base, expandHome(input || "."))
   const rel = path.relative(base, full)
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`Error: Path is outside the configured base directory: ${full}`)
+    throw new PathOutsideBaseError(full)
   }
   return full
 }
@@ -112,9 +122,10 @@ export const defaultIgnoreList = () => {
 
 export const matchesPattern = (rel: string, matchers: Minimatch[]) => matchers.some((item) => item.match(rel))
 
-export const ignored = (rel: string, matchers: Minimatch[], defaults = defaultIgnoreList()) => {
+export const ignored = (rel: string, matchers: Minimatch[], defaults = defaultIgnoreList(), defaultMatchers = compile(defaults)) => {
   const parts = rel.split("/")
   if (parts.some((part) => defaults.includes(part))) return true
+  if (matchesPattern(rel, defaultMatchers)) return true
   if (matchesPattern(rel, matchers)) return true
   return false
 }
@@ -133,6 +144,7 @@ export const walk = async (base: string, opts?: WalkOptions) => {
   const include = compile(opts?.include)
   const exclude = compile(opts?.exclude)
   const defaults = defaultIgnoreList()
+  const defaultMatchers = compile(defaults)
   const recursive = opts?.recursive ?? true
   const type = opts?.type ?? "all"
 
@@ -144,7 +156,7 @@ export const walk = async (base: string, opts?: WalkOptions) => {
       const full = path.join(dir, item.name)
       if (blocked(full, base)) continue
       const rel = relPath(base, full)
-      if (ignored(rel, skip, defaults)) continue
+      if (ignored(rel, skip, defaults, defaultMatchers)) continue
       if (matchesPattern(rel, exclude)) continue
       if (item.isDirectory()) {
         if (type !== "files" && (include.length === 0 || matchesPattern(rel, include))) out.push({ path: full, dir: true })

@@ -1,5 +1,5 @@
 import { tool, Tool, ToolsProviderController } from "@lmstudio/sdk"
-import { createReadStream, existsSync } from "node:fs"
+import { createReadStream, existsSync, type Stats } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
 import { createInterface } from "node:readline"
@@ -10,6 +10,7 @@ import { formatError, formatOutput, isErrorOutput, outputPayload } from "./error
 import {
   READ_LIMIT,
   FILE_LIMIT,
+  PathOutsideBaseError,
   expandHome,
   resolvePath,
   relPath,
@@ -32,12 +33,38 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     try {
       return input && path.isAbsolute(input) ? resolvePath(base, path.relative(base, input)) : resolvePath(base, input)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const match = message.match(/^Error: Path is outside the configured base directory: (.+)$/)
-      if (match) {
-        return formatError("path_outside_base", "Path is outside the configured base directory", [["path", match[1]]])
+      if (error instanceof PathOutsideBaseError) {
+        return formatError("path_outside_base", "Path is outside the configured base directory", [["path", error.filePath]])
       }
+      const message = error instanceof Error ? error.message : String(error)
       return formatError("filesystem_error", "Filesystem operation failed", [["details", message]])
+    }
+  }
+
+  const ensureExistingPathIsSafe = async (target: string, expected: "file" | "directory"): Promise<{ stat?: Stats; error?: string }> => {
+    const stat = await fs.lstat(target).catch(() => undefined)
+    if (stat?.isSymbolicLink()) {
+      return { error: formatError("wrong_type", "Path is a symbolic link", [["expected", expected], ["actual", "symlink"], ["path", target]]) }
+    }
+    return { stat }
+  }
+
+  const ensureParentWithinBase = async (base: string, target: string) => {
+    const realBase = await fs.realpath(base).catch(() => base)
+    let current = path.dirname(target)
+    while (true) {
+      const stat = await fs.lstat(current).catch(() => undefined)
+      if (stat) {
+        const realCurrent = await fs.realpath(current).catch(() => current)
+        const rel = path.relative(realBase, realCurrent)
+        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+          return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
+        }
+        return undefined
+      }
+      const parent = path.dirname(current)
+      if (parent === current) return undefined
+      current = parent
     }
   }
 
@@ -54,7 +81,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const base = baseDir()
         const file = resolveInputPath(base, filePath)
         if (isErrorOutput(file)) return file
-        const stat = await fs.stat(file).catch(() => undefined)
+        const { stat, error } = await ensureExistingPathIsSafe(file, "file")
+        if (error) return error
         if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
         if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
         if (await binary(file)) return formatError("binary_file", "Cannot read binary file", [["path", file]])
@@ -303,7 +331,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (isErrorOutput(target)) return target
 
         if (type === "file") {
-          const stat = await fs.stat(target).catch(() => undefined)
+          const { stat, error } = await ensureExistingPathIsSafe(target, "file")
+          if (error) return error
           if (stat?.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", target]])
           if (stat && !overwrite) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
           const fileEncoding = encoding ?? "utf8"
@@ -312,6 +341,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           const lines = text.split(/\r?\n/)
           const count = text.length > 0 ? (text.endsWith("\n") ? lines.length - 1 : lines.length) : 0
           try {
+            const parentError = await ensureParentWithinBase(base, target)
+            if (parentError) return parentError
             if (rec) await fs.mkdir(path.dirname(target), { recursive: true })
             const bytes = fileEncoding === "base64"
               ? Buffer.from(text, "base64")
@@ -341,11 +372,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (encoding !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "encoding"]])
         }
-        const stat = await fs.stat(target).catch(() => undefined)
+        const { stat, error } = await ensureExistingPathIsSafe(target, "directory")
+        if (error) return error
         if (stat?.isFile()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", target]])
         if (stat) return formatError("already_exists", "Directory already exists", [["kind", "directory"], ["path", target]])
         const rec = recursive ?? true
         try {
+          const parentError = await ensureParentWithinBase(base, target)
+          if (parentError) return parentError
           await fs.mkdir(target, { recursive: rec })
         } catch (error) {
           return formatError("filesystem_error", "Filesystem operation failed", [["path", target], ["details", error instanceof Error ? error.message : String(error)]])
@@ -384,7 +418,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const file = resolveInputPath(base, input)
         if (isErrorOutput(file)) return file
 
-        const stat = await fs.stat(file).catch(() => undefined)
+        const { stat, error } = await ensureExistingPathIsSafe(file, "file")
+        if (error) return error
         if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
         if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
         if (await binary(file)) return formatError("binary_file", "Cannot edit binary file", [["path", file]])

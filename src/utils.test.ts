@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import {
   expandHome,
+  PathOutsideBaseError,
   resolvePath,
   relPath,
   compile,
@@ -88,11 +89,11 @@ describe("resolvePath", () => {
   })
 
   it("throws for paths outside base", () => {
-    expect(() => resolvePath(tmp, "../..")).toThrow("outside the configured base directory")
+    expect(() => resolvePath(tmp, "../..")).toThrow(PathOutsideBaseError)
   })
 
   it("throws for absolute paths outside base", () => {
-    expect(() => resolvePath(tmp, "/etc/passwd")).toThrow("outside the configured base directory")
+    expect(() => resolvePath(tmp, "/etc/passwd")).toThrow(PathOutsideBaseError)
   })
 })
 
@@ -159,6 +160,10 @@ describe("ignored", () => {
     expect(ignored("app.log", matchers)).toBe(true)
     expect(ignored("logs/app.log", matchers)).toBe(true)
   })
+
+  it("supports glob-like env ignore patterns in defaults", () => {
+    expect(ignored("tmp/cache/file.txt", [], ["tmp/**"])).toBe(true)
+  })
 })
 
 describe("blocked", () => {
@@ -198,6 +203,12 @@ describe("walk", () => {
     const names = (await walk(tmp)).map((i) => relPath(tmp, i.path))
     expect(names).toContain("node_modules")
     expect(names).toContain("node_modules/pkg.js")
+  })
+
+  it("supports glob-style env ignore overrides", async () => {
+    process.env[IGNORE_PATHS_ENV] = "src/lib/**"
+    const names = (await walk(tmp)).map((i) => relPath(tmp, i.path))
+    expect(names).not.toContain("src/lib/helper.ts")
   })
 
   it("non-recursive lists only top level", async () => {

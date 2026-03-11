@@ -41,7 +41,8 @@ Traversal tools (`list`, `glob`, and `grep`) filter ignored paths before returni
   - `venv`
   - `env`
 - If `LMS_FILESYSTEM_IGNORE_PATHS` is set, it overrides the built-in list entirely.
-- Format: semicolon-separated glob patterns, for example `dist;coverage;generated/**`
+- Format: semicolon-separated glob patterns, for example `dist;coverage;generated;generated/**`
+- To ignore both a directory entry and everything below it, include both the bare directory path and its recursive subtree pattern, for example `generated;generated/**`.
 - If `LMS_FILESYSTEM_IGNORE_PATHS` is present but empty, the built-in ignore list is disabled.
 
 ## Read-only
