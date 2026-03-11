@@ -73,9 +73,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       name: "read",
       description: "Read text from a file at an absolute or home-relative path with optional line offset and limit.",
       parameters: {
-        filePath: z.string().describe("Absolute or home-relative file path to read from."),
-        offset: z.number().int().min(1).optional().describe("Starting line number, 1-indexed."),
-        limit: z.number().int().min(1).optional().describe("Maximum number of lines to return."),
+        filePath: z.string().describe("Absolute or home-relative file path to read from, e.g., \"/home/user/file.txt\", \"~/docs/notes.md\"."),
+        offset: z.number().int().min(1).optional().describe("Starting line number, 1-indexed, e.g., 1, 50, 100."),
+        limit: z.number().int().min(1).optional().describe("Maximum number of lines to return, e.g., 50, 200."),
       },
       implementation: async ({ filePath, offset, limit }) => {
         const base = baseDir()
@@ -136,12 +136,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       name: "list",
       description: "List files or directories from an absolute or home-relative directory with optional recursion, filtering, and pagination.",
       parameters: {
-        path: z.string().optional().describe("Absolute or home-relative directory path to list from."),
-        ignore: z.array(z.string()).optional().describe("Array of glob patterns for paths to skip during traversal, for example [\"dist\", \"coverage\", \"generated/**\"]."),
-        recursive: z.boolean().optional().describe("Recurse into subdirectories."),
-        type: z.enum(["files", "directories", "all"]).optional().describe("Whether to return \"files\", \"directories\", or \"all\"."),
-        offset: z.number().int().min(1).optional().describe("Starting entry number, 1-indexed."),
-        limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("Maximum number of entries to return."),
+        path: z.string().optional().describe("Absolute or home-relative directory path to list from, e.g., \"/home/user/project\", \"~/documents\"."),
+        ignore: z.array(z.string()).optional().describe("Array of glob patterns for paths to skip during traversal, e.g., [\"dist\", \"coverage\", \"generated/**\"]."),
+        recursive: z.boolean().optional().describe("Recurse into subdirectories, e.g., true, false."),
+        type: z.enum(["files", "directories", "all"]).optional().describe("Whether to return files, directories, or all, e.g., \"files\", \"directories\", \"all\"."),
+        offset: z.number().int().min(1).optional().describe("Starting entry number, 1-indexed, e.g., 1, 50."),
+        limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("Maximum number of entries to return, e.g., 50, 100."),
       },
       implementation: async ({ path: input, ignore, recursive, type, offset, limit }) => {
         const base = baseDir()
@@ -187,13 +187,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       name: "glob",
       description: "Match file or directory paths by glob pattern from an absolute or home-relative directory. Use this to find files by name or path, not by file contents.",
       parameters: {
-        pattern: z.string().describe("Glob pattern to match against file or directory paths relative to the search root, for example *.ts, src/**/*.tsx, or **/*Tests*.cs."),
-        path: z.string().optional().describe("Absolute or home-relative directory path to search from."),
-        type: z.enum(["files", "directories", "all"]).optional().describe("Whether to match \"files\", \"directories\", or \"all\"."),
-        include: z.array(z.string()).optional().describe("Array of glob patterns that returned files or directories must match, for example [\"src/**\", \"**/*.ts\"]."),
-        exclude: z.array(z.string()).optional().describe("Array of glob patterns for files or directories to exclude from results and traversal, for example [\"dist/**\", \"**/*.test.ts\"]."),
-        offset: z.number().int().min(1).optional().describe("Starting entry number, 1-indexed."),
-        limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("Maximum number of entries to return."),
+        pattern: z.string().describe("Glob pattern to match against file or directory paths relative to the search root, e.g., \"*.ts\", \"src/**/*.tsx\", \"**/*Tests*.cs\"."),
+        path: z.string().optional().describe("Absolute or home-relative directory path to search from, e.g., \"/home/user/project\", \"~/src\"."),
+        type: z.enum(["files", "directories", "all"]).optional().describe("Whether to match files, directories, or all, e.g., \"files\", \"directories\", \"all\"."),
+        include: z.array(z.string()).optional().describe("Array of glob patterns that returned entries must match, e.g., [\"src/**\", \"**/*.ts\"]."),
+        exclude: z.array(z.string()).optional().describe("Array of glob patterns for entries to exclude from results and traversal, e.g., [\"dist/**\", \"**/*.test.ts\"]."),
+        offset: z.number().int().min(1).optional().describe("Starting entry number, 1-indexed, e.g., 1, 50."),
+        limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("Maximum number of entries to return, e.g., 50, 100."),
       },
       implementation: async ({ pattern, path: input, type, include, exclude, offset, limit }) => {
         const base = baseDir()
@@ -244,10 +244,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description:
         "Search file contents with a regular expression from an absolute or home-relative directory. Use this only for text inside files, not for file names or paths.",
       parameters: {
-        pattern: z.string().describe("Regular expression to search for inside file contents, not file names or paths, for example describe\\(, TODO, or class\\s+User."),
-        path: z.string().optional().describe("Absolute or home-relative directory path to search from."),
-        include: z.array(z.string()).optional().describe("Array of glob patterns that candidate files must match before their contents are searched, for example [\"**/*.cs\", \"src/**\"]."),
-        exclude: z.array(z.string()).optional().describe("Array of glob patterns for files or directories to exclude from the search, for example [\"dist/**\", \"**/*.generated.cs\"]."),
+        pattern: z.string().describe("Regular expression to search for inside file contents, not file names or paths, e.g., \"describe\\\\(\", \"TODO\", \"class\\\\s+User\"."),
+        path: z.string().optional().describe("Absolute or home-relative directory path to search from, e.g., \"/home/user/project\", \"~/src\"."),
+        include: z.array(z.string()).optional().describe("Array of glob patterns that candidate files must match before their contents are searched, e.g., [\"**/*.cs\", \"src/**\"]."),
+        exclude: z.array(z.string()).optional().describe("Array of glob patterns for files or directories to exclude from the search, e.g., [\"dist/**\", \"**/*.generated.cs\"]."),
       },
       implementation: async ({ pattern, path: input, include, exclude }) => {
         const base = baseDir()
@@ -318,12 +318,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description:
         "Create a file or directory at an absolute or home-relative path, with optional file overwrite and parent directory creation.",
       parameters: {
-        type: z.enum(["file", "directory"]).describe("Whether to create a file or directory."),
-        path: z.string().describe("Absolute or home-relative target path to create."),
-        content: z.string().optional().describe("File content to write when type is file."),
-        overwrite: z.boolean().optional().describe("Allow replacing an existing file when type is file."),
-        recursive: z.boolean().optional().describe("Create missing parent directories when creating a file or directory."),
-        encoding: z.enum(["utf8", "base64"]).optional().describe("Encoding for file content when type is file: \"utf8\" or \"base64\"."),
+        type: z.enum(["file", "directory"]).describe("Whether to create a file or directory, e.g., \"file\", \"directory\"."),
+        path: z.string().describe("Absolute or home-relative target path to create, e.g., \"/home/user/new.txt\", \"~/project/src\"."),
+        content: z.string().optional().describe("File content to write when type is \"file\", e.g., \"hello world\\n\", \"export default {}\"."),
+        overwrite: z.boolean().optional().describe("Allow replacing an existing file when type is \"file\", e.g., true, false."),
+        recursive: z.boolean().optional().describe("Create missing parent directories when creating a file or directory, e.g., true, false."),
+        encoding: z.enum(["utf8", "base64"]).optional().describe("Encoding for file content when type is \"file\", e.g., \"utf8\", \"base64\"."),
       },
       implementation: async ({ type, path: input, content, overwrite, recursive, encoding }) => {
         const base = baseDir()
@@ -400,18 +400,18 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description:
         "Edit an existing text file by applying exact text replacements in order, failing on missing, ambiguous, or no-op edits.",
       parameters: {
-        path: z.string().describe("Absolute or home-relative file path to edit."),
+        path: z.string().describe("Absolute or home-relative file path to edit, e.g., \"/home/user/file.ts\", \"~/project/config.json\"."),
         edits: z
           .array(
             z.object({
-              oldString: z.string().describe("Exact text to replace."),
-              newString: z.string().describe("Replacement text."),
-              replaceAll: z.boolean().optional().describe("Set to true to replace every match of oldString; otherwise exactly one match is required."),
+              oldString: z.string().describe("Exact text to find and replace, e.g., \"const x = 1\", \"Hello World\"."),
+              newString: z.string().describe("Replacement text, e.g., \"const x = 2\", \"Hello Universe\"."),
+              replaceAll: z.boolean().optional().describe("Set to true to replace every match of oldString; otherwise exactly one match is required, e.g., true, false."),
             }),
           )
           .min(1)
-          .describe("Array of exact text replacements to apply in order to the file contents, for example [{\"oldString\":\"foo\",\"newString\":\"bar\"}]."),
-        encoding: z.enum(["utf8"]).optional().describe("Encoding of the file being edited."),
+          .describe("Array of exact text replacements to apply in order, e.g., [{\"oldString\":\"foo\",\"newString\":\"bar\"}]."),
+        encoding: z.enum(["utf8"]).optional().describe("Encoding of the file being edited, e.g., \"utf8\"."),
       },
       implementation: async ({ path: input, edits, encoding }) => {
         const base = baseDir()
