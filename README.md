@@ -71,7 +71,7 @@ Success example:
 #total:100
 #has_more:true
 #next_offset:12
-#content_bytes:22
+#content_bytes:19
 10: hello
 11: world
 ```
@@ -113,7 +113,7 @@ Success example:
 #total:5
 #has_more:true
 #next_offset:3
-#entries_bytes:30
+#entries_bytes:27
 /Users/john/project/
   src/
 ```

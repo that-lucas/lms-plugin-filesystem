@@ -654,7 +654,8 @@ describe("create tool", () => {
   })
 
   it("overwrites existing file when overwrite is true", async () => {
-    const target = path.join(tmp, "src", "existing.ts")
+    const target = path.join(tmp, "src", "existing-overwrite.ts")
+    await fs.writeFile(target, "old\n")
     const result = await tools.create({ type: "file", path: target, content: "new\n", overwrite: true })
     expect(parseCreate(result)).toMatchObject({
       path: target,
