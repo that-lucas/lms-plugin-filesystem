@@ -727,9 +727,15 @@ describe("create tool", () => {
     expect(parseError(result).code).toBe("filesystem_error")
   })
 
-  it("returns error when file type has recursive set to false", async () => {
-    const result = await tools.create({ type: "file", path: path.join(tmp, "v1.txt"), content: "x", recursive: false })
-    expect(parseError(result).code).toBe("invalid_parameter")
+  it("allows file type with recursive set to false when the parent exists", async () => {
+    const target = path.join(tmp, "v1.txt")
+    const result = await tools.create({ type: "file", path: target, content: "x", recursive: false })
+    expect(parseCreate(result).path).toBe(target)
+  })
+
+  it("returns error when file type has recursive set to false and the parent is missing", async () => {
+    const result = await tools.create({ type: "file", path: path.join(tmp, "no-parent-file", "v1.txt"), content: "x", recursive: false })
+    expect(parseError(result).code).toBe("filesystem_error")
   })
 
   it("allows file type with recursive set to true", async () => {
@@ -753,16 +759,14 @@ describe("create tool", () => {
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("allows directory type with encoding set to utf8", async () => {
-    const target = path.join(tmp, "v6")
-    const result = await tools.create({ type: "directory", path: target, encoding: "utf8" })
-    expect(parseCreate(result).path).toBe(target)
+  it("returns error when directory type has encoding set to utf8", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v6"), encoding: "utf8" })
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("allows directory type with overwrite set to false", async () => {
-    const target = path.join(tmp, "v7")
-    const result = await tools.create({ type: "directory", path: target, overwrite: false })
-    expect(parseCreate(result).path).toBe(target)
+  it("returns error when directory type has overwrite set to false", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v7"), overwrite: false })
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error for path outside base directory", async () => {

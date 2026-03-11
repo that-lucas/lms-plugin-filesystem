@@ -159,7 +159,7 @@ Success example:
 #total:8
 #has_more:true
 #next_offset:3
-#entries_bytes:63
+#entries_bytes:65
 /Users/john/project/src/index.ts
 /Users/john/project/src/utils.ts
 ```
@@ -237,12 +237,12 @@ Create a new file or directory.
 | `path` | string | - | Absolute or home-relative path (e.g., `/Users/john/file.ext`, `~/path/to/dir`) |
 | `content` | string | - | File content. Only used when type is `file`. |
 | `overwrite` | boolean | `false` | Allow replacing an existing file. Only used when type is `file`. |
-| `recursive` | boolean | `true` | Create parent directories. Only used when type is `directory`. |
+| `recursive` | boolean | `true` | Create missing parent directories for file or directory creation. |
 | `encoding` | `utf8` \| `base64` | `utf8` | Content encoding. Only used when type is `file`. |
 
 Notes:
 
-- parameters that don't apply to the chosen type are rejected if set to a non-default value
+- parameters that don't apply to the chosen type are rejected if supplied
 
 Success example (file):
 

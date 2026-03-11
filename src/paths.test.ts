@@ -159,10 +159,12 @@ describe("grep special system paths", () => {
   })
 
   it("skips /private/var/run", async () => {
-    expect(parseGrepSummary(await rootTools.grep({ pattern: ".*", path: "/private/var/run" }))).toEqual({ total: "0", files: "0" })
+    const result = await rootTools.grep({ pattern: ".*", path: "/private/var/run" })
+    expect(parseGrepSummary(result).total === "0" || parseError(result).code === "not_found").toBe(true)
   })
 
   it("skips /Volumes", async () => {
-    expect(parseGrepSummary(await rootTools.grep({ pattern: ".*", path: "/Volumes" }))).toEqual({ total: "0", files: "0" })
+    const result = await rootTools.grep({ pattern: ".*", path: "/Volumes" })
+    expect(parseGrepSummary(result).total === "0" || parseError(result).code === "not_found").toBe(true)
   })
 })

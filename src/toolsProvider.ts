@@ -288,13 +288,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     tool({
       name: "create",
       description:
-        "Create a file or directory at an absolute or home-relative path, with optional file overwrite and directory parent creation.",
+        "Create a file or directory at an absolute or home-relative path, with optional file overwrite and parent directory creation.",
       parameters: {
         type: z.enum(["file", "directory"]).describe("Whether to create a file or directory."),
         path: z.string().describe("Absolute or home-relative target path to create."),
         content: z.string().optional().describe("File content to write when type is file."),
         overwrite: z.boolean().optional().describe("Allow replacing an existing file when type is file."),
-        recursive: z.boolean().optional().describe("Create missing parent directories when type is directory."),
+        recursive: z.boolean().optional().describe("Create missing parent directories when creating a file or directory."),
         encoding: z.enum(["utf8", "base64"]).optional().describe("Encoding for file content when type is file: \"utf8\" or \"base64\"."),
       },
       implementation: async ({ type, path: input, content, overwrite, recursive, encoding }) => {
@@ -303,18 +303,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (isErrorOutput(target)) return target
 
         if (type === "file") {
-          if (recursive !== undefined && recursive !== true) {
-            return formatError("invalid_parameter", "Parameter is not used when type is file", [["parameter", "recursive"]])
-          }
           const stat = await fs.stat(target).catch(() => undefined)
           if (stat?.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", target]])
           if (stat && !overwrite) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
           const fileEncoding = encoding ?? "utf8"
+          const rec = recursive ?? true
           const text = content || ""
           const lines = text.split(/\r?\n/)
           const count = text.length > 0 ? (text.endsWith("\n") ? lines.length - 1 : lines.length) : 0
           try {
-            await fs.mkdir(path.dirname(target), { recursive: true })
+            if (rec) await fs.mkdir(path.dirname(target), { recursive: true })
             const bytes = fileEncoding === "base64"
               ? Buffer.from(text, "base64")
               : Buffer.from(text, "utf8")
@@ -337,10 +335,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (content !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "content"]])
         }
-        if (overwrite !== undefined && overwrite !== false) {
+        if (overwrite !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "overwrite"]])
         }
-        if (encoding !== undefined && encoding !== "utf8") {
+        if (encoding !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "encoding"]])
         }
         const stat = await fs.stat(target).catch(() => undefined)
