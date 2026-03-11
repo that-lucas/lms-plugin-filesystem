@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest"
 import * as fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -7,98 +7,140 @@ import { toolsProvider } from "./toolsProvider"
 let tmp: string
 let tools: Record<string, (params: any) => Promise<string>>
 
-const mustTag = (output: string, name: string) => {
-  const match = output.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))
-  if (!match) throw new Error(`Missing tag: ${name}`)
-  return match[1]
+type FlatRecord = {
+  fields: Record<string, string>
+  payloads: Record<string, string>
 }
 
-const optionalTag = (output: string, name: string) => {
-  const match = output.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))
-  return match ? match[1] : undefined
-}
+const parseFlat = (output: string) => {
+  const record: FlatRecord = { fields: {}, payloads: {} }
+  let index = 0
 
-const blockLines = (output: string, name: string) => {
-  const body = mustTag(output, name).replace(/^\n/, "").replace(/\n$/, "")
-  if (body.length === 0) return []
-  return body.split("\n")
-}
+  while (index < output.length) {
+    if (output[index] !== "#") throw new Error(`Invalid flat output at index ${index}`)
+    const newline = output.indexOf("\n", index)
+    const line = newline === -1 ? output.slice(index) : output.slice(index, newline)
+    const separator = line.indexOf(":")
+    if (separator === -1) throw new Error(`Invalid flat field: ${line}`)
+    const key = line.slice(1, separator)
+    const value = line.slice(separator + 1)
+    index = newline === -1 ? output.length : newline + 1
 
-const parseGrep = (output: string) => {
-  const path = mustTag(output, "path")
-  const pattern = mustTag(output, "pattern")
-  const matchesOpen = output.match(/<matches total="(\d+)" files="(\d+)">/)
-  const matchesBody = output.match(/<matches total="\d+" files="\d+">([\s\S]*)<\/matches>/)
-  if (!matchesOpen || !matchesBody) throw new Error("Invalid grep output")
-
-  const files: Array<{ path: string; matches: Array<{ line: number; text: string }> }> = []
-  const fileRegex = /<file path="([\s\S]*?)">([\s\S]*?)<\/file>/g
-  for (const fileMatch of matchesBody[1].matchAll(fileRegex)) {
-    const filePath = fileMatch[1]
-    const body = fileMatch[2]
-    const matches: Array<{ line: number; text: string }> = []
-    const matchRegex = /<match line="(\d+)">([\s\S]*?)<\/match>/g
-    for (const item of body.matchAll(matchRegex)) {
-      matches.push({ line: Number(item[1]), text: item[2] })
+    if (key.endsWith("_bytes")) {
+      const payloadKey = key.slice(0, -6)
+      const length = Number(value)
+      if (!Number.isInteger(length) || length < 0) throw new Error(`Invalid byte count for ${key}`)
+      record.fields[key] = value
+      const payload = output.slice(index, index + length)
+      record.payloads[payloadKey] = payload
+      index += length
+      if (index < output.length && output[index] === "\n") index += 1
+      continue
     }
-    files.push({ path: filePath, matches })
+
+    record.fields[key] = value
   }
 
+  return record
+}
+
+const parseError = (output: string) => {
+  const parsed = parseFlat(output)
   return {
-    path,
-    pattern,
-    total: Number(matchesOpen[1]),
-    files: Number(matchesOpen[2]),
-    matches: files,
+    code: parsed.fields.error,
+    message: parsed.fields.message,
+    kind: parsed.fields.kind,
+    path: parsed.fields.path,
+    expected: parsed.fields.expected,
+    actual: parsed.fields.actual,
+    parameter: parsed.fields.parameter,
+    value: parsed.fields.value,
+    total: parsed.fields.total,
+    unit: parsed.fields.unit,
+    pattern: parsed.fields.pattern,
+    matches: parsed.fields.matches,
+    details: parsed.fields.details,
   }
 }
 
 const parseRead = (output: string) => {
+  const parsed = parseFlat(output)
+  const content = parsed.payloads.content || ""
   return {
-    path: mustTag(output, "path"),
-    type: mustTag(output, "type"),
-    offset: Number(mustTag(output, "offset")),
-    limit: Number(mustTag(output, "limit")),
-    total: Number(mustTag(output, "total")),
-    hasMore: mustTag(output, "has_more") === "true",
-    nextOffset: optionalTag(output, "next_offset") ? Number(optionalTag(output, "next_offset")) : undefined,
-    lines: blockLines(output, "content"),
+    path: parsed.fields.path,
+    type: parsed.fields.type,
+    offset: Number(parsed.fields.offset),
+    limit: Number(parsed.fields.limit),
+    total: Number(parsed.fields.total),
+    hasMore: parsed.fields.has_more === "true",
+    nextOffset: parsed.fields.next_offset ? Number(parsed.fields.next_offset) : undefined,
+    lines: content.length === 0 ? [] : content.split("\n"),
+    contentBytes: Number(parsed.fields.content_bytes),
   }
 }
 
-const parseList = (output: string) => ({
-  path: mustTag(output, "path"),
-  type: mustTag(output, "type"),
-  offset: Number(mustTag(output, "offset")),
-  limit: Number(mustTag(output, "limit")),
-  total: Number(mustTag(output, "total")),
-  hasMore: mustTag(output, "has_more") === "true",
-  nextOffset: optionalTag(output, "next_offset") ? Number(optionalTag(output, "next_offset")) : undefined,
-  entries: blockLines(output, "entries"),
-})
+const parseList = (output: string) => {
+  const parsed = parseFlat(output)
+  const entries = parsed.payloads.entries || ""
+  return {
+    path: parsed.fields.path,
+    type: parsed.fields.type,
+    offset: Number(parsed.fields.offset),
+    limit: Number(parsed.fields.limit),
+    total: Number(parsed.fields.total),
+    hasMore: parsed.fields.has_more === "true",
+    nextOffset: parsed.fields.next_offset ? Number(parsed.fields.next_offset) : undefined,
+    entries: entries.length === 0 ? [] : entries.split("\n"),
+    entriesBytes: Number(parsed.fields.entries_bytes),
+  }
+}
 
-const parseGlob = (output: string) => ({
-  path: mustTag(output, "path"),
-  type: mustTag(output, "type"),
-  pattern: mustTag(output, "pattern"),
-  offset: Number(mustTag(output, "offset")),
-  limit: Number(mustTag(output, "limit")),
-  total: Number(mustTag(output, "total")),
-  hasMore: mustTag(output, "has_more") === "true",
-  nextOffset: optionalTag(output, "next_offset") ? Number(optionalTag(output, "next_offset")) : undefined,
-  entries: blockLines(output, "entries").filter(Boolean),
-})
+const parseGlob = (output: string) => {
+  const parsed = parseFlat(output)
+  const entries = parsed.payloads.entries || ""
+  return {
+    path: parsed.fields.path,
+    type: parsed.fields.type,
+    pattern: parsed.fields.pattern,
+    offset: Number(parsed.fields.offset),
+    limit: Number(parsed.fields.limit),
+    total: Number(parsed.fields.total),
+    hasMore: parsed.fields.has_more === "true",
+    nextOffset: parsed.fields.next_offset ? Number(parsed.fields.next_offset) : undefined,
+    entries: entries.length === 0 ? [] : entries.split("\n").filter(Boolean),
+    entriesBytes: Number(parsed.fields.entries_bytes),
+  }
+}
+
+const parseGrep = (output: string) => {
+  const parsed = parseFlat(output)
+  const total = Number(parsed.fields.matches_total)
+  const matches = Array.from({ length: total }, (_, index) => ({
+    path: parsed.fields[`matches_${index}_path`],
+    line: Number(parsed.fields[`matches_${index}_line`]),
+    text: parsed.payloads[`matches_${index}_content`] || "",
+  }))
+  return {
+    path: parsed.fields.path,
+    pattern: parsed.fields.pattern,
+    total,
+    files: Number(parsed.fields.matches_files),
+    matches,
+  }
+}
+
+const parseCreate = (output: string) => parseFlat(output).fields
+const parseEdit = (output: string) => parseFlat(output).fields
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-tools-"))
 
-  // text files
   await fs.writeFile(path.join(tmp, "hello.txt"), "line 1\nline 2\nline 3\nline 4\nline 5\n")
   await fs.writeFile(path.join(tmp, "empty.txt"), "")
   await fs.writeFile(path.join(tmp, "search-me.ts"), 'const foo = "bar"\nconst baz = "qux"\nfoo()\n')
   await fs.writeFile(path.join(tmp, "multi-match.ts"), "foo one\nfoo two\nfoo three\n")
+  await fs.writeFile(path.join(tmp, "literal.txt"), "#header: value\n<tag>\n\nplain text\n")
 
-  // nested
   await fs.mkdir(path.join(tmp, "src"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "index.ts"), 'export const main = () => "hello"\n')
   await fs.writeFile(path.join(tmp, "src", "utils.ts"), "export const add = (a: number, b: number) => a + b\n")
@@ -107,48 +149,38 @@ beforeAll(async () => {
   await fs.writeFile(path.join(tmp, "src", "existing.ts"), "existing\n")
   await fs.mkdir(path.join(tmp, "src", "existing-dir"), { recursive: true })
 
-  // binary
   const buf = Buffer.alloc(64)
   buf[0] = 0
   await fs.writeFile(path.join(tmp, "data.bin"), buf)
 
-  // default-ignored
   await fs.mkdir(path.join(tmp, "node_modules"), { recursive: true })
   await fs.writeFile(path.join(tmp, "node_modules", "dep.js"), "module.exports = {}\n")
 
-  // large file for pagination
   const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`)
   await fs.writeFile(path.join(tmp, "big.txt"), lines.join("\n") + "\n")
 
   const now = new Date()
-  const t1 = new Date(now.getTime() - 60_000)
-  const t2 = new Date(now.getTime() - 50_000)
-  const t3 = new Date(now.getTime() - 40_000)
-  const t4 = new Date(now.getTime() - 30_000)
-  const t5 = new Date(now.getTime() - 20_000)
-  const t6 = new Date(now.getTime() - 10_000)
-  const t7 = new Date(now.getTime())
-  const t8 = new Date(now.getTime() + 10_000)
-  const t9 = new Date(now.getTime() - 5_000)
-  await fs.utimes(path.join(tmp, "hello.txt"), t1, t1)
-  await fs.utimes(path.join(tmp, "empty.txt"), t2, t2)
-  await fs.utimes(path.join(tmp, "search-me.ts"), t3, t3)
-  await fs.utimes(path.join(tmp, "src", "lib", "helper.ts"), t4, t4)
-  await fs.utimes(path.join(tmp, "src", "utils.ts"), t5, t5)
-  await fs.utimes(path.join(tmp, "src", "index.ts"), t6, t6)
-  await fs.utimes(path.join(tmp, "big.txt"), t7, t7)
-  await fs.utimes(path.join(tmp, "multi-match.ts"), t8, t8)
-  await fs.utimes(path.join(tmp, "data.bin"), t9, t9)
-  const tExisting = new Date(now.getTime() - 15_000)
-  await fs.utimes(path.join(tmp, "src", "existing.ts"), tExisting, tExisting)
+  const times = [
+    ["hello.txt", -60_000],
+    ["empty.txt", -50_000],
+    ["search-me.ts", -40_000],
+    [path.join("src", "lib", "helper.ts"), -30_000],
+    [path.join("src", "utils.ts"), -20_000],
+    [path.join("src", "index.ts"), -10_000],
+    ["big.txt", 0],
+    ["multi-match.ts", 10_000],
+    ["data.bin", -5_000],
+    [path.join("src", "existing.ts"), -15_000],
+    ["literal.txt", -25_000],
+  ] as const
+  for (const [file, offset] of times) {
+    const time = new Date(now.getTime() + offset)
+    await fs.utimes(path.join(tmp, file), time, time)
+  }
 
-  // mock the ToolsProviderController
   const mockCtl = {
     getPluginConfig: () => ({
-      get: (key: string) => {
-        if (key === "baseDir") return tmp
-        return undefined
-      },
+      get: (key: string) => key === "baseDir" ? tmp : undefined,
     }),
   } as any
 
@@ -159,13 +191,15 @@ beforeAll(async () => {
   }
 })
 
+beforeEach(() => {
+  delete process.env.LMS_FILESYSTEM_IGNORE_PATHS
+})
+
 afterAll(async () => {
+  delete process.env.LMS_FILESYSTEM_IGNORE_PATHS
   await fs.rm(tmp, { recursive: true, force: true })
 })
 
-// ---------------------------------------------------------------------------
-// read
-// ---------------------------------------------------------------------------
 describe("read tool", () => {
   it("reads a text file with line numbers", async () => {
     const result = await tools.read({ filePath: path.join(tmp, "hello.txt") })
@@ -178,6 +212,7 @@ describe("read tool", () => {
       hasMore: false,
       nextOffset: undefined,
       lines: ["1: line 1", "2: line 2", "3: line 3", "4: line 4", "5: line 5"],
+      contentBytes: Buffer.byteLength("1: line 1\n2: line 2\n3: line 3\n4: line 4\n5: line 5", "utf8"),
     })
   })
 
@@ -192,28 +227,53 @@ describe("read tool", () => {
       hasMore: true,
       nextOffset: 15,
       lines: ["10: line 10", "11: line 11", "12: line 12", "13: line 13", "14: line 14"],
+      contentBytes: Buffer.byteLength("10: line 10\n11: line 11\n12: line 12\n13: line 13\n14: line 14", "utf8"),
     })
+  })
+
+  it("frames raw content without escaping", async () => {
+    const result = await tools.read({ filePath: path.join(tmp, "literal.txt") })
+    expect(parseRead(result).lines).toEqual([
+      "1: #header: value",
+      "2: <tag>",
+      "3: ",
+      "4: plain text",
+    ])
   })
 
   it("returns error for missing file", async () => {
     const result = await tools.read({ filePath: path.join(tmp, "nope.txt") })
-    expect(result).toContain("Error: File not found")
+    expect(parseError(result).code).toBe("not_found")
   })
 
   it("returns error for directory path", async () => {
     const result = await tools.read({ filePath: path.join(tmp, "src") })
-    expect(result).toContain("is a directory")
-    expect(result).toContain("list tool")
+    expect(parseError(result)).toMatchObject({
+      code: "wrong_type",
+      message: "Path is a directory",
+      path: path.join(tmp, "src"),
+      expected: "file",
+      actual: "directory",
+    })
   })
 
   it("returns error for binary file", async () => {
     const result = await tools.read({ filePath: path.join(tmp, "data.bin") })
-    expect(result).toContain("Cannot read binary file")
+    expect(parseError(result)).toMatchObject({
+      code: "binary_file",
+      path: path.join(tmp, "data.bin"),
+    })
   })
 
   it("returns error for out-of-range offset", async () => {
     const result = await tools.read({ filePath: path.join(tmp, "hello.txt"), offset: 999 })
-    expect(result).toContain("out of range")
+    expect(parseError(result)).toMatchObject({
+      code: "out_of_range",
+      parameter: "offset",
+      value: "999",
+      total: "5",
+      unit: "lines",
+    })
   })
 
   it("handles empty file", async () => {
@@ -227,26 +287,25 @@ describe("read tool", () => {
       hasMore: false,
       nextOffset: undefined,
       lines: [],
+      contentBytes: 0,
     })
   })
 })
 
-// ---------------------------------------------------------------------------
-// list
-// ---------------------------------------------------------------------------
 describe("list tool", () => {
   it("lists top-level entries by default", async () => {
     const result = await tools.list({ path: tmp })
-    expect(result).toContain("hello.txt")
-    expect(result).toContain("src/")
-    // should not recurse into src
-    expect(result).not.toContain("index.ts")
+    const parsed = parseList(result)
+    expect(parsed.entries).toContain("  hello.txt")
+    expect(parsed.entries).toContain("  src/")
+    expect(parsed.entries).not.toContain("    index.ts")
   })
 
   it("uses the base directory when path is omitted", async () => {
     const result = await tools.list({})
-    expect(result).toContain("hello.txt")
-    expect(result).toContain("src/")
+    const parsed = parseList(result)
+    expect(parsed.entries).toContain("  hello.txt")
+    expect(parsed.entries).toContain("  src/")
   })
 
   it("lists recursively with tree format", async () => {
@@ -255,39 +314,59 @@ describe("list tool", () => {
       path: tmp,
       type: "directory",
       offset: 1,
-      limit: 13,
-      total: 13,
+      limit: 14,
+      total: 14,
       hasMore: false,
       nextOffset: undefined,
       entries: [
-      `${tmp}/`,
-      "  src/",
-      "    existing-dir/",
-      "    lib/",
-      "      helper.ts",
-      "    existing.ts",
-      "    index.ts",
-      "    utils.ts",
-      "  big.txt",
-      "  data.bin",
-      "  empty.txt",
-      "  hello.txt",
-      "  multi-match.ts",
-      "  search-me.ts",
+        `${tmp}/`,
+        "  src/",
+        "    existing-dir/",
+        "    lib/",
+        "      helper.ts",
+        "    existing.ts",
+        "    index.ts",
+        "    utils.ts",
+        "  big.txt",
+        "  data.bin",
+        "  empty.txt",
+        "  hello.txt",
+        "  literal.txt",
+        "  multi-match.ts",
+        "  search-me.ts",
       ],
+      entriesBytes: Buffer.byteLength([
+        `${tmp}/`,
+        "  src/",
+        "    existing-dir/",
+        "    lib/",
+        "      helper.ts",
+        "    existing.ts",
+        "    index.ts",
+        "    utils.ts",
+        "  big.txt",
+        "  data.bin",
+        "  empty.txt",
+        "  hello.txt",
+        "  literal.txt",
+        "  multi-match.ts",
+        "  search-me.ts",
+      ].join("\n"), "utf8"),
     })
   })
 
   it("filters by type: files", async () => {
     const result = await tools.list({ path: tmp, type: "files" })
-    expect(result).not.toContain("src/")
-    expect(result).toContain("hello.txt")
+    const parsed = parseList(result)
+    expect(parsed.entries).not.toContain("  src/")
+    expect(parsed.entries).toContain("  hello.txt")
   })
 
   it("filters by type: directories", async () => {
     const result = await tools.list({ path: tmp, type: "directories" })
-    expect(result).toContain("src/")
-    expect(result).not.toContain("hello.txt")
+    const parsed = parseList(result)
+    expect(parsed.entries).toContain("  src/")
+    expect(parsed.entries).not.toContain("  hello.txt")
   })
 
   it("skips default-ignored directories", async () => {
@@ -298,19 +377,20 @@ describe("list tool", () => {
 
   it("respects ignore patterns", async () => {
     const result = await tools.list({ path: tmp, ignore: ["*.txt"] })
-    expect(result).not.toContain("hello.txt")
-    expect(result).not.toContain("big.txt")
-    expect(result).toContain("src/")
+    const parsed = parseList(result)
+    expect(parsed.entries).not.toContain("  hello.txt")
+    expect(parsed.entries).not.toContain("  big.txt")
+    expect(parsed.entries).toContain("  src/")
   })
 
   it("returns error for missing directory", async () => {
     const result = await tools.list({ path: path.join(tmp, "nope") })
-    expect(result).toContain("Error: Directory not found")
+    expect(parseError(result).code).toBe("not_found")
   })
 
   it("returns error for out-of-range offset", async () => {
     const result = await tools.list({ path: tmp, offset: 999 })
-    expect(result).toContain("out of range")
+    expect(parseError(result).code).toBe("out_of_range")
   })
 
   it("supports pagination", async () => {
@@ -320,17 +400,15 @@ describe("list tool", () => {
       type: "directory",
       offset: 1,
       limit: 2,
-      total: 7,
+      total: 8,
       hasMore: true,
       nextOffset: 3,
       entries: [`${tmp}/`, "  big.txt", "  data.bin"],
+      entriesBytes: Buffer.byteLength([`${tmp}/`, "  big.txt", "  data.bin"].join("\n"), "utf8"),
     })
   })
 })
 
-// ---------------------------------------------------------------------------
-// glob
-// ---------------------------------------------------------------------------
 describe("glob tool", () => {
   it("matches files by pattern", async () => {
     const result = await tools.glob({ pattern: "*.txt", path: tmp })
@@ -339,59 +417,22 @@ describe("glob tool", () => {
       type: "files",
       pattern: "*.txt",
       offset: 1,
-      limit: 3,
-      total: 3,
+      limit: 4,
+      total: 4,
       hasMore: false,
       nextOffset: undefined,
-      entries: [path.join(tmp, "big.txt"), path.join(tmp, "empty.txt"), path.join(tmp, "hello.txt")],
+      entries: [path.join(tmp, "big.txt"), path.join(tmp, "literal.txt"), path.join(tmp, "empty.txt"), path.join(tmp, "hello.txt")],
+      entriesBytes: Buffer.byteLength([
+        path.join(tmp, "big.txt"),
+        path.join(tmp, "literal.txt"),
+        path.join(tmp, "empty.txt"),
+        path.join(tmp, "hello.txt"),
+      ].join("\n"), "utf8"),
     })
   })
 
   it("matches nested files with **", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp })
-    expect(parseGlob(result)).toEqual({
-      path: tmp,
-      type: "files",
-      pattern: "**/*.ts",
-      offset: 1,
-      limit: 6,
-      total: 6,
-      hasMore: false,
-      nextOffset: undefined,
-      entries: [
-        path.join(tmp, "multi-match.ts"),
-        path.join(tmp, "src", "index.ts"),
-        path.join(tmp, "src", "existing.ts"),
-        path.join(tmp, "src", "utils.ts"),
-        path.join(tmp, "src", "lib", "helper.ts"),
-        path.join(tmp, "search-me.ts"),
-      ],
-    })
-  })
-
-  it("returns no results message for unmatched pattern", async () => {
-    const result = await tools.glob({ pattern: "*.xyz", path: tmp })
-    expect(parseGlob(result)).toEqual({
-      path: tmp,
-      type: "files",
-      pattern: "*.xyz",
-      offset: 1,
-      limit: 0,
-      total: 0,
-      hasMore: false,
-      nextOffset: undefined,
-      entries: [],
-    })
-  })
-
-  it("respects type filter for directories", async () => {
-    const result = await tools.glob({ pattern: "*", path: tmp, type: "directories" })
-    expect(result).toContain("src")
-    expect(result).not.toContain("hello.txt")
-  })
-
-  it("respects include filter", async () => {
-    const result = await tools.glob({ pattern: "**/*", path: tmp, include: ["*.ts"] })
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
@@ -402,8 +443,35 @@ describe("glob tool", () => {
     ])
   })
 
-  it("respects exclude filter", async () => {
-    const result = await tools.glob({ pattern: "**/*.ts", path: tmp, exclude: ["src/lib/**"] })
+  it("does not match nested files without nested glob syntax", async () => {
+    const result = await tools.glob({ pattern: "*.ts", path: tmp })
+    expect(parseGlob(result).entries).toEqual([path.join(tmp, "multi-match.ts"), path.join(tmp, "search-me.ts")])
+  })
+
+  it("returns no results for unmatched pattern", async () => {
+    const result = await tools.glob({ pattern: "*.xyz", path: tmp })
+    expect(parseGlob(result).entries).toEqual([])
+  })
+
+  it("respects type filter for directories", async () => {
+    const result = await tools.glob({ pattern: "*", path: tmp, type: "directories" })
+    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src")])
+  })
+
+  it("respects include filter with standard glob semantics", async () => {
+    const result = await tools.glob({ pattern: "**/*", path: tmp, include: ["**/*.ts"] })
+    expect(parseGlob(result).entries).toEqual([
+      path.join(tmp, "multi-match.ts"),
+      path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "existing.ts"),
+      path.join(tmp, "src", "utils.ts"),
+      path.join(tmp, "src", "lib", "helper.ts"),
+      path.join(tmp, "search-me.ts"),
+    ])
+  })
+
+  it("respects exclude filter for directories and does not traverse them", async () => {
+    const result = await tools.glob({ pattern: "**/*.ts", path: tmp, exclude: ["src/lib", "src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
@@ -413,44 +481,31 @@ describe("glob tool", () => {
     ])
   })
 
-  it("returns error for out-of-range offset", async () => {
-    const result = await tools.glob({ pattern: "**/*", path: tmp, offset: 999 })
-    expect(result).toContain("out of range")
+  it("returns included directories while still traversing unmatched parents", async () => {
+    const result = await tools.glob({ pattern: "**", path: tmp, type: "directories", include: ["src/lib"] })
+    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src", "lib")])
   })
 
   it("supports pagination", async () => {
     const result = await tools.glob({ pattern: "**/*", path: tmp, limit: 2 })
-    expect(parseGlob(result)).toEqual({
-      path: tmp,
-      type: "files",
-      pattern: "**/*",
-      offset: 1,
-      limit: 2,
-      total: 10,
-      hasMore: true,
-      nextOffset: 3,
-      entries: [path.join(tmp, "multi-match.ts"), path.join(tmp, "big.txt")],
-    })
+    const parsed = parseGlob(result)
+    expect(parsed.type).toBe("files")
+    expect(parsed.limit).toBe(2)
+    expect(parsed.hasMore).toBe(true)
+    expect(parsed.nextOffset).toBe(3)
   })
 
-  it("sorts matches by most recently modified first", async () => {
-    const result = await tools.glob({ pattern: "*.txt", path: tmp })
-    expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "big.txt"),
-      path.join(tmp, "empty.txt"),
-      path.join(tmp, "hello.txt"),
-    ])
+  it("returns error for out-of-range offset", async () => {
+    const result = await tools.glob({ pattern: "**/*", path: tmp, offset: 999 })
+    expect(parseError(result).code).toBe("out_of_range")
   })
 
   it("returns error for missing directory", async () => {
     const result = await tools.glob({ pattern: "*", path: path.join(tmp, "nope") })
-    expect(result).toContain("Error: Directory not found")
+    expect(parseError(result).code).toBe("not_found")
   })
 })
 
-// ---------------------------------------------------------------------------
-// grep
-// ---------------------------------------------------------------------------
 describe("grep tool", () => {
   it("finds matches in files", async () => {
     const result = await tools.grep({ pattern: "foo", path: tmp })
@@ -460,21 +515,11 @@ describe("grep tool", () => {
       total: 5,
       files: 2,
       matches: [
-        {
-          path: path.join(tmp, "multi-match.ts"),
-          matches: [
-            { line: 1, text: "foo one" },
-            { line: 2, text: "foo two" },
-            { line: 3, text: "foo three" },
-          ],
-        },
-        {
-          path: path.join(tmp, "search-me.ts"),
-          matches: [
-            { line: 1, text: 'const foo = "bar"' },
-            { line: 3, text: "foo()" },
-          ],
-        },
+        { path: path.join(tmp, "multi-match.ts"), line: 1, text: "foo one" },
+        { path: path.join(tmp, "multi-match.ts"), line: 2, text: "foo two" },
+        { path: path.join(tmp, "multi-match.ts"), line: 3, text: "foo three" },
+        { path: path.join(tmp, "search-me.ts"), line: 1, text: 'const foo = "bar"' },
+        { path: path.join(tmp, "search-me.ts"), line: 3, text: "foo()" },
       ],
     })
   })
@@ -486,7 +531,7 @@ describe("grep tool", () => {
       pattern: "baz",
       total: 1,
       files: 1,
-      matches: [{ path: path.join(tmp, "search-me.ts"), matches: [{ line: 2, text: 'const baz = "qux"' }] }],
+      matches: [{ path: path.join(tmp, "search-me.ts"), line: 2, text: 'const baz = "qux"' }],
     })
   })
 
@@ -497,37 +542,33 @@ describe("grep tool", () => {
       pattern: "hello",
       total: 1,
       files: 1,
-      matches: [{ path: path.join(tmp, "src", "index.ts"), matches: [{ line: 1, text: 'export const main = () => "hello"' }] }],
+      matches: [{ path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' }],
     })
   })
 
-  it("respects include filter", async () => {
-    const result = await tools.grep({ pattern: "export", path: tmp, include: ["*.ts"] })
-    expect(parseGrep(result)).toEqual({
-      path: tmp,
-      pattern: "export",
-      total: 3,
-      files: 3,
-      matches: [
-        { path: path.join(tmp, "src", "index.ts"), matches: [{ line: 1, text: 'export const main = () => "hello"' }] },
-        { path: path.join(tmp, "src", "utils.ts"), matches: [{ line: 1, text: "export const add = (a: number, b: number) => a + b" }] },
-        { path: path.join(tmp, "src", "lib", "helper.ts"), matches: [{ line: 1, text: "export function help() {}" }] },
-      ],
-    })
+  it("respects include filter with standard glob semantics", async () => {
+    const result = await tools.grep({ pattern: "export", path: tmp, include: ["**/*.ts"] })
+    expect(parseGrep(result).matches).toEqual([
+      { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
+      { path: path.join(tmp, "src", "utils.ts"), line: 1, text: "export const add = (a: number, b: number) => a + b" },
+      { path: path.join(tmp, "src", "lib", "helper.ts"), line: 1, text: "export function help() {}" },
+    ])
   })
 
   it("respects exclude filter", async () => {
-    const result = await tools.grep({ pattern: "export", path: tmp, exclude: ["src/lib/**"] })
-    expect(parseGrep(result)).toEqual({
-      path: tmp,
-      pattern: "export",
-      total: 2,
-      files: 2,
-      matches: [
-        { path: path.join(tmp, "src", "index.ts"), matches: [{ line: 1, text: 'export const main = () => "hello"' }] },
-        { path: path.join(tmp, "src", "utils.ts"), matches: [{ line: 1, text: "export const add = (a: number, b: number) => a + b" }] },
-      ],
-    })
+    const result = await tools.grep({ pattern: "export", path: tmp, exclude: ["src/lib", "src/lib/**"] })
+    expect(parseGrep(result).matches).toEqual([
+      { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
+      { path: path.join(tmp, "src", "utils.ts"), line: 1, text: "export const add = (a: number, b: number) => a + b" },
+    ])
+  })
+
+  it("returns raw match content without escaping", async () => {
+    const result = await tools.grep({ pattern: "#header|<tag>", path: tmp, include: ["literal.txt"] })
+    expect(parseGrep(result).matches).toEqual([
+      { path: path.join(tmp, "literal.txt"), line: 1, text: "#header: value" },
+      { path: path.join(tmp, "literal.txt"), line: 2, text: "<tag>" },
+    ])
   })
 
   it("skips binary files", async () => {
@@ -535,7 +576,7 @@ describe("grep tool", () => {
     expect(result).not.toContain("data.bin")
   })
 
-  it("returns no matches message", async () => {
+  it("returns empty match metadata when nothing matches", async () => {
     const result = await tools.grep({ pattern: "zzzznotfound", path: tmp })
     expect(parseGrep(result)).toEqual({
       path: tmp,
@@ -546,187 +587,203 @@ describe("grep tool", () => {
     })
   })
 
-  it("sorts matching files by most recently modified first", async () => {
+  it("sorts matches by file mtime then line order", async () => {
     const result = await tools.grep({ pattern: "foo", path: tmp })
-    expect(parseGrep(result).matches.map((file) => file.path)).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "search-me.ts"),
+    expect(parseGrep(result).matches.map((match) => `${path.basename(match.path)}:${match.line}`)).toEqual([
+      "multi-match.ts:1",
+      "multi-match.ts:2",
+      "multi-match.ts:3",
+      "search-me.ts:1",
+      "search-me.ts:3",
     ])
-  })
-
-  it("groups multiple matches from the same file under one header", async () => {
-    const result = await tools.grep({ pattern: "foo", path: tmp, include: ["multi-match.ts"] })
-    expect(parseGrep(result)).toEqual({
-      path: tmp,
-      pattern: "foo",
-      total: 3,
-      files: 1,
-      matches: [
-        {
-          path: path.join(tmp, "multi-match.ts"),
-          matches: [
-            { line: 1, text: "foo one" },
-            { line: 2, text: "foo two" },
-            { line: 3, text: "foo three" },
-          ],
-        },
-      ],
-    })
   })
 
   it("returns error for invalid regex", async () => {
     const result = await tools.grep({ pattern: "[invalid", path: tmp })
-    expect(result).toContain("Error: Invalid regular expression")
+    expect(parseError(result).code).toBe("invalid_pattern")
   })
 
   it("returns error for missing directory", async () => {
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "nope") })
-    expect(result).toContain("Error: Directory not found")
+    expect(parseError(result).code).toBe("not_found")
   })
 })
 
-// ---------------------------------------------------------------------------
-// create
-// ---------------------------------------------------------------------------
 describe("create tool", () => {
-  // --- file creation ---
   it("creates a new file with content", async () => {
     const target = path.join(tmp, "created.txt")
     const result = await tools.create({ type: "file", path: target, content: "hello\nworld\n" })
-    expect(result).toContain("Created file:")
-    expect(result).toContain("(2 lines)")
-    const actual = await fs.readFile(target, "utf8")
-    expect(actual).toBe("hello\nworld\n")
+    expect(parseCreate(result)).toEqual({
+      path: target,
+      type: "file",
+      status: "created",
+      encoding: "utf8",
+      overwritten: "false",
+      lines: "2",
+      bytes: String(Buffer.byteLength("hello\nworld\n", "utf8")),
+    })
+    expect(await fs.readFile(target, "utf8")).toBe("hello\nworld\n")
   })
 
   it("creates a new empty file when content is omitted", async () => {
     const target = path.join(tmp, "created-empty.txt")
     const result = await tools.create({ type: "file", path: target })
-    expect(result).toContain("Created file:")
-    expect(result).toContain("(empty)")
-    const actual = await fs.readFile(target, "utf8")
-    expect(actual).toBe("")
+    expect(parseCreate(result)).toEqual({
+      path: target,
+      type: "file",
+      status: "created",
+      encoding: "utf8",
+      overwritten: "false",
+      lines: "0",
+      bytes: "0",
+    })
+    expect(await fs.readFile(target, "utf8")).toBe("")
   })
 
   it("creates parent directories automatically for files", async () => {
     const target = path.join(tmp, "deep", "nested", "dir", "file.txt")
     const result = await tools.create({ type: "file", path: target, content: "hi" })
-    expect(result).toContain("Created file:")
-    const actual = await fs.readFile(target, "utf8")
-    expect(actual).toBe("hi")
+    expect(parseCreate(result).path).toBe(target)
+    expect(await fs.readFile(target, "utf8")).toBe("hi")
   })
 
   it("returns error when file already exists", async () => {
     const target = path.join(tmp, "src", "existing.ts")
     const result = await tools.create({ type: "file", path: target, content: "new" })
-    expect(result).toContain("Error: File already exists:")
+    expect(parseError(result).code).toBe("already_exists")
   })
 
   it("overwrites existing file when overwrite is true", async () => {
     const target = path.join(tmp, "src", "existing.ts")
     const result = await tools.create({ type: "file", path: target, content: "new\n", overwrite: true })
-    expect(result).toContain("Created file:")
-    expect(result).toContain("(1 lines)")
-    const actual = await fs.readFile(target, "utf8")
-    expect(actual).toBe("new\n")
+    expect(parseCreate(result)).toMatchObject({
+      path: target,
+      overwritten: "true",
+      lines: "1",
+    })
+    expect(await fs.readFile(target, "utf8")).toBe("new\n")
   })
 
   it("creates a file with base64 encoding", async () => {
     const data = Buffer.from("binary data")
     const target = path.join(tmp, "created.bin")
     const result = await tools.create({ type: "file", path: target, content: data.toString("base64"), encoding: "base64" })
-    expect(result).toContain("Created file:")
-    const actual = await fs.readFile(target)
-    expect(actual.equals(data)).toBe(true)
+    expect(parseCreate(result)).toMatchObject({
+      path: target,
+      encoding: "base64",
+      bytes: String(data.byteLength),
+    })
+    expect((await fs.readFile(target)).equals(data)).toBe(true)
   })
 
-  // --- directory creation ---
+  it("returns structured error when file target is an existing directory", async () => {
+    const target = path.join(tmp, "src", "existing-dir")
+    const result = await tools.create({ type: "file", path: target, overwrite: true })
+    expect(parseError(result)).toMatchObject({
+      code: "wrong_type",
+      expected: "file",
+      actual: "directory",
+      path: target,
+    })
+  })
+
   it("creates a new directory", async () => {
     const target = path.join(tmp, "new-dir")
     const result = await tools.create({ type: "directory", path: target })
-    expect(result).toContain("Created directory:")
-    const stat = await fs.stat(target)
-    expect(stat.isDirectory()).toBe(true)
+    expect(parseCreate(result)).toEqual({
+      path: target,
+      type: "directory",
+      status: "created",
+      recursive: "true",
+    })
   })
 
   it("creates nested directories recursively by default", async () => {
     const target = path.join(tmp, "a", "b", "c", "d")
     const result = await tools.create({ type: "directory", path: target })
-    expect(result).toContain("Created directory:")
-    const stat = await fs.stat(target)
-    expect(stat.isDirectory()).toBe(true)
+    expect(parseCreate(result).recursive).toBe("true")
   })
 
   it("returns error when directory already exists", async () => {
     const target = path.join(tmp, "src", "existing-dir")
     const result = await tools.create({ type: "directory", path: target })
-    expect(result).toContain("Error: Directory already exists:")
+    expect(parseError(result).code).toBe("already_exists")
+  })
+
+  it("returns error when directory target is an existing file", async () => {
+    const target = path.join(tmp, "src", "existing.ts")
+    const result = await tools.create({ type: "directory", path: target })
+    expect(parseError(result)).toMatchObject({
+      code: "wrong_type",
+      expected: "directory",
+      actual: "file",
+      path: target,
+    })
   })
 
   it("returns error when recursive is false and parent missing", async () => {
     const target = path.join(tmp, "no-parent", "child")
     const result = await tools.create({ type: "directory", path: target, recursive: false })
-    expect(result).toContain("Error:")
+    expect(parseError(result).code).toBe("filesystem_error")
   })
 
-  // --- validation: mismatched parameters ---
   it("returns error when file type has recursive set to false", async () => {
     const result = await tools.create({ type: "file", path: path.join(tmp, "v1.txt"), content: "x", recursive: false })
-    expect(result).toBe('Error: Parameter "recursive" is not used when type is file')
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("allows file type with recursive set to true (default value)", async () => {
+  it("allows file type with recursive set to true", async () => {
     const target = path.join(tmp, "v2.txt")
     const result = await tools.create({ type: "file", path: target, content: "x", recursive: true })
-    expect(result).toContain("Created file:")
+    expect(parseCreate(result).path).toBe(target)
   })
 
   it("returns error when directory type has content set", async () => {
     const result = await tools.create({ type: "directory", path: path.join(tmp, "v3"), content: "oops" })
-    expect(result).toBe('Error: Parameter "content" is not used when type is directory')
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error when directory type has overwrite set to true", async () => {
     const result = await tools.create({ type: "directory", path: path.join(tmp, "v4"), overwrite: true })
-    expect(result).toBe('Error: Parameter "overwrite" is not used when type is directory')
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error when directory type has encoding set to base64", async () => {
     const result = await tools.create({ type: "directory", path: path.join(tmp, "v5"), encoding: "base64" })
-    expect(result).toBe('Error: Parameter "encoding" is not used when type is directory')
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("allows directory type with encoding set to utf8 (default value)", async () => {
+  it("allows directory type with encoding set to utf8", async () => {
     const target = path.join(tmp, "v6")
     const result = await tools.create({ type: "directory", path: target, encoding: "utf8" })
-    expect(result).toContain("Created directory:")
+    expect(parseCreate(result).path).toBe(target)
   })
 
-  it("allows directory type with overwrite set to false (default value)", async () => {
+  it("allows directory type with overwrite set to false", async () => {
     const target = path.join(tmp, "v7")
     const result = await tools.create({ type: "directory", path: target, overwrite: false })
-    expect(result).toContain("Created directory:")
+    expect(parseCreate(result).path).toBe(target)
   })
 
-  // --- security ---
   it("returns error for path outside base directory", async () => {
     const result = await tools.create({ type: "file", path: "/tmp/escape.txt", content: "x" })
-    expect(result).toContain("Error:")
+    expect(parseError(result).code).toBe("path_outside_base")
   })
 })
 
-// ---------------------------------------------------------------------------
-// edit
-// ---------------------------------------------------------------------------
 describe("edit tool", () => {
   it("edits a file with one unique replacement", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
+    const result = await tools.edit({ path: target, edits: [{ oldString: "beta", newString: "delta" }] })
+    expect(parseEdit(result)).toEqual({
       path: target,
-      edits: [{ oldString: "beta", newString: "delta" }],
+      type: "file",
+      status: "edited",
+      encoding: "utf8",
+      changes_requested: "1",
+      changes_performed: "1",
     })
-    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
     expect(await fs.readFile(target, "utf8")).toBe("alpha\ndelta\ngamma\n")
   })
 
@@ -740,79 +797,58 @@ describe("edit tool", () => {
         { oldString: "center end", newString: "finish" },
       ],
     })
-    expect(result).toBe("Edited file: edit-chain.txt (2 edits)")
+    expect(parseEdit(result).changes_requested).toBe("2")
     expect(await fs.readFile(target, "utf8")).toBe("start finish\n")
   })
 
   it("replaces all matches when replaceAll is true", async () => {
     const target = path.join(tmp, "edit-many.txt")
     await fs.writeFile(target, "foo\nfoo\nfoo\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "foo", newString: "bar", replaceAll: true }],
-    })
-    expect(result).toBe("Edited file: edit-many.txt (1 edits)")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "foo", newString: "bar", replaceAll: true }] })
+    expect(parseEdit(result).changes_performed).toBe("1")
     expect(await fs.readFile(target, "utf8")).toBe("bar\nbar\nbar\n")
   })
 
   it("allows newString to be empty", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "beta\n", newString: "" }],
-    })
-    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
+    await tools.edit({ path: target, edits: [{ oldString: "beta\n", newString: "" }] })
     expect(await fs.readFile(target, "utf8")).toBe("alpha\ngamma\n")
   })
 
   it("can empty a file by replacing the full content with an empty string", async () => {
     const target = path.join(tmp, "edit-empty-target.txt")
     await fs.writeFile(target, "erase me\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "erase me\n", newString: "" }],
-    })
-    expect(result).toBe("Edited file: edit-empty-target.txt (1 edits)")
+    await tools.edit({ path: target, edits: [{ oldString: "erase me\n", newString: "" }] })
     expect(await fs.readFile(target, "utf8")).toBe("")
   })
 
   it("returns error when oldString is empty", async () => {
-    await fs.writeFile(path.join(tmp, "edit-one.txt"), "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
-      path: path.join(tmp, "edit-one.txt"),
-      edits: [{ oldString: "", newString: "delta" }],
-    })
-    expect(result).toBe('Error: Parameter "oldString" must not be empty')
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "", newString: "delta" }] })
+    expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error when oldString and newString are identical", async () => {
-    await fs.writeFile(path.join(tmp, "edit-one.txt"), "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
-      path: path.join(tmp, "edit-one.txt"),
-      edits: [{ oldString: "beta", newString: "beta" }],
-    })
-    expect(result).toBe("Error: oldString and newString must be different")
+    const target = path.join(tmp, "edit-one.txt")
+    await fs.writeFile(target, "alpha\nbeta\ngamma\n")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "beta", newString: "beta" }] })
+    expect(parseError(result).code).toBe("no_change")
   })
 
   it("returns error when oldString is not found", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "missing", newString: "delta" }],
-    })
-    expect(result).toBe(`Error: oldString not found: ${target}`)
+    const result = await tools.edit({ path: target, edits: [{ oldString: "missing", newString: "delta" }] })
+    expect(parseError(result).code).toBe("match_not_found")
   })
 
   it("returns error when multiple matches exist and replaceAll is not true", async () => {
     const target = path.join(tmp, "edit-many.txt")
     await fs.writeFile(target, "foo\nfoo\nfoo\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "foo", newString: "bar" }],
-    })
-    expect(result).toBe(`Error: oldString matched 3 times in file: ${target}. Use replaceAll to edit all matches.`)
+    const result = await tools.edit({ path: target, edits: [{ oldString: "foo", newString: "bar" }] })
+    expect(parseError(result).code).toBe("ambiguous_match")
   })
 
   it("keeps the file unchanged when a later edit fails", async () => {
@@ -826,65 +862,44 @@ describe("edit tool", () => {
         { oldString: "missing", newString: "unused" },
       ],
     })
-    expect(result).toBe(`Error: oldString not found: ${target}`)
+    expect(parseError(result).code).toBe("match_not_found")
     expect(await fs.readFile(target, "utf8")).toBe(original)
   })
 
   it("returns error when file does not exist", async () => {
     const target = path.join(tmp, "no-edit.txt")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "a", newString: "b" }],
-    })
-    expect(result).toBe(`Error: File not found: ${target}`)
+    const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
+    expect(parseError(result).code).toBe("not_found")
   })
 
   it("returns error when path is a directory", async () => {
     const target = path.join(tmp, "src")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "a", newString: "b" }],
-    })
-    expect(result).toBe(`Error: ${target} is a directory. The edit tool only works on files.`)
+    const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
+    expect(parseError(result).code).toBe("wrong_type")
   })
 
   it("returns error for binary file", async () => {
     const target = path.join(tmp, "data.bin")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "a", newString: "b" }],
-    })
-    expect(result).toBe(`Error: Cannot edit binary file: ${target}`)
+    const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
+    expect(parseError(result).code).toBe("binary_file")
   })
 
   it("returns error for path outside base directory", async () => {
-    const result = await tools.edit({
-      path: "/tmp/escape.txt",
-      edits: [{ oldString: "a", newString: "b" }],
-    })
-    expect(result).toContain("Error:")
+    const result = await tools.edit({ path: "/tmp/escape.txt", edits: [{ oldString: "a", newString: "b" }] })
+    expect(parseError(result).code).toBe("path_outside_base")
   })
 
   it("uses utf8 by default", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "alpha", newString: "omega" }],
-    })
-    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
-    expect(await fs.readFile(target, "utf8")).toBe("omega\nbeta\ngamma\n")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "alpha", newString: "omega" }] })
+    expect(parseEdit(result).encoding).toBe("utf8")
   })
 
   it("accepts encoding utf8 explicitly", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({
-      path: target,
-      edits: [{ oldString: "gamma", newString: "theta" }],
-      encoding: "utf8",
-    })
-    expect(result).toBe("Edited file: edit-one.txt (1 edits)")
-    expect(await fs.readFile(target, "utf8")).toBe("alpha\nbeta\ntheta\n")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "gamma", newString: "theta" }], encoding: "utf8" })
+    expect(parseEdit(result).encoding).toBe("utf8")
   })
 })

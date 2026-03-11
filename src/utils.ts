@@ -82,6 +82,8 @@ export type WalkOptions = {
   type?: "all" | "files" | "directories"
 }
 
+export const IGNORE_PATHS_ENV = "LMS_FILESYSTEM_IGNORE_PATHS"
+
 export const expandHome = (input: string) => {
   if (input === "~") return os.homedir()
   if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2))
@@ -101,10 +103,19 @@ export const relPath = (base: string, target: string) => path.relative(base, tar
 
 export const compile = (patterns?: string[]) => (patterns || []).map((item) => new Minimatch(item, { dot: true, nocase: true }))
 
-export const ignored = (rel: string, name: string, matchers: Minimatch[]) => {
+export const defaultIgnoreList = () => {
+  const raw = process.env[IGNORE_PATHS_ENV]
+  if (raw === undefined) return DEFAULT_IGNORES
+  if (raw.length === 0) return []
+  return raw.split(";").map((item) => item.trim()).filter((item) => item.length > 0)
+}
+
+export const matchesPattern = (rel: string, matchers: Minimatch[]) => matchers.some((item) => item.match(rel))
+
+export const ignored = (rel: string, matchers: Minimatch[], defaults = defaultIgnoreList()) => {
   const parts = rel.split("/")
-  if (parts.some((part) => DEFAULT_IGNORES.includes(part))) return true
-  if (matchers.some((item) => item.match(rel) || item.match(name))) return true
+  if (parts.some((part) => defaults.includes(part))) return true
+  if (matchesPattern(rel, matchers)) return true
   return false
 }
 
@@ -121,6 +132,7 @@ export const walk = async (base: string, opts?: WalkOptions) => {
   const skip = compile(opts?.ignore)
   const include = compile(opts?.include)
   const exclude = compile(opts?.exclude)
+  const defaults = defaultIgnoreList()
   const recursive = opts?.recursive ?? true
   const type = opts?.type ?? "all"
 
@@ -132,16 +144,16 @@ export const walk = async (base: string, opts?: WalkOptions) => {
       const full = path.join(dir, item.name)
       if (blocked(full, base)) continue
       const rel = relPath(base, full)
-      if (ignored(rel, item.name, skip)) continue
+      if (ignored(rel, skip, defaults)) continue
+      if (matchesPattern(rel, exclude)) continue
       if (item.isDirectory()) {
-        if (type !== "files") out.push({ path: full, dir: true })
+        if (type !== "files" && (include.length === 0 || matchesPattern(rel, include))) out.push({ path: full, dir: true })
         if (recursive) await visit(full)
         continue
       }
       const stat = await fs.lstat(full).catch(() => undefined)
       if (!stat || stat.isSymbolicLink() || !stat.isFile()) continue
-      if (exclude.some((pattern) => pattern.match(rel) || pattern.match(item.name))) continue
-      if (include.length > 0 && !include.some((pattern) => pattern.match(rel) || pattern.match(item.name))) continue
+      if (include.length > 0 && !matchesPattern(rel, include)) continue
       if (type !== "directories") out.push({ path: full, dir: false })
     }
   }

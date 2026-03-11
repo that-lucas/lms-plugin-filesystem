@@ -1,7 +1,7 @@
 {
   "name": "filesystem",
   "version": "0.0.1",
-  "description": "Filesystem tools for LM Studio: read, list, glob, and grep",
+  "description": "Filesystem tools for LM Studio: read, list, glob, grep, create, and edit",
   "main": "index.js",
   "scripts": {
     "dev": "lms dev",

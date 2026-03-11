@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest"
 import * as fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -13,6 +13,9 @@ import {
   binary,
   formatTree,
   DEFAULT_IGNORES,
+  IGNORE_PATHS_ENV,
+  defaultIgnoreList,
+  matchesPattern,
 } from "./utils"
 
 let tmp: string
@@ -20,55 +23,43 @@ let tmp: string
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-test-"))
 
-  // files
   await fs.writeFile(path.join(tmp, "hello.txt"), "hello world\n")
   await fs.writeFile(path.join(tmp, "empty.txt"), "")
   await fs.writeFile(path.join(tmp, "long-line.txt"), "x".repeat(5000) + "\n")
 
-  // nested dirs
   await fs.mkdir(path.join(tmp, "src"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "index.ts"), 'console.log("hi")\n')
   await fs.writeFile(path.join(tmp, "src", "utils.ts"), "export const foo = 1\n")
   await fs.mkdir(path.join(tmp, "src", "lib"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "lib", "helper.ts"), "export function help() {}\n")
 
-  // default-ignored dir
   await fs.mkdir(path.join(tmp, "node_modules"), { recursive: true })
   await fs.writeFile(path.join(tmp, "node_modules", "pkg.js"), "module.exports = {}\n")
 
-  // binary file (null bytes)
   const buf = Buffer.alloc(64)
   buf[0] = 0
   buf[1] = 0
   await fs.writeFile(path.join(tmp, "image.bin"), buf)
 
-  // binary by extension
   await fs.writeFile(path.join(tmp, "photo.png"), "not really a png")
-
-  // binary by control-char ratio
-  await fs.writeFile(
-    path.join(tmp, "control-chars.txt"),
-    Buffer.from([1, 2, 3, 4, 5, 6, 65, 66, 67, 68]),
-  )
-
-  // dotfile
+  await fs.writeFile(path.join(tmp, "control-chars.txt"), Buffer.from([1, 2, 3, 4, 5, 6, 65, 66, 67, 68]))
   await fs.writeFile(path.join(tmp, ".hidden"), "secret\n")
 
-  // deeply nested
   await fs.mkdir(path.join(tmp, "a", "b", "c"), { recursive: true })
   await fs.writeFile(path.join(tmp, "a", "b", "c", "deep.txt"), "deep\n")
 
-  // symlink
   await fs.symlink(path.join(tmp, "hello.txt"), path.join(tmp, "hello-link.txt"))
 })
 
+beforeEach(() => {
+  delete process.env[IGNORE_PATHS_ENV]
+})
+
 afterAll(async () => {
+  delete process.env[IGNORE_PATHS_ENV]
   await fs.rm(tmp, { recursive: true, force: true })
 })
 
-// ---------------------------------------------------------------------------
-// expandHome
-// ---------------------------------------------------------------------------
 describe("expandHome", () => {
   it("expands ~ to homedir", () => {
     expect(expandHome("~")).toBe(os.homedir())
@@ -87,13 +78,9 @@ describe("expandHome", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// resolvePath
-// ---------------------------------------------------------------------------
 describe("resolvePath", () => {
   it("resolves a relative path within base", () => {
-    const result = resolvePath(tmp, "src")
-    expect(result).toBe(path.join(tmp, "src"))
+    expect(resolvePath(tmp, "src")).toBe(path.join(tmp, "src"))
   })
 
   it("resolves . to base itself", () => {
@@ -109,9 +96,6 @@ describe("resolvePath", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// relPath
-// ---------------------------------------------------------------------------
 describe("relPath", () => {
   it("returns relative forward-slash path", () => {
     expect(relPath(tmp, path.join(tmp, "src", "index.ts"))).toBe("src/index.ts")
@@ -122,10 +106,7 @@ describe("relPath", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// compile
-// ---------------------------------------------------------------------------
-describe("compile", () => {
+describe("compile and matching", () => {
   it("returns empty array for undefined", () => {
     expect(compile()).toHaveLength(0)
   })
@@ -136,33 +117,50 @@ describe("compile", () => {
     expect(matchers[0].match("foo.ts")).toBe(true)
     expect(matchers[0].match("foo.js")).toBe(false)
   })
+
+  it("matches only relative path values", () => {
+    const matchers = compile(["*.ts"])
+    expect(matchesPattern("root.ts", matchers)).toBe(true)
+    expect(matchesPattern("src/index.ts", matchers)).toBe(false)
+  })
 })
 
-// ---------------------------------------------------------------------------
-// ignored
-// ---------------------------------------------------------------------------
+describe("defaultIgnoreList", () => {
+  it("uses defaults when env var is absent", () => {
+    expect(defaultIgnoreList()).toEqual(DEFAULT_IGNORES)
+  })
+
+  it("uses custom semicolon-separated values when env var is present", () => {
+    process.env[IGNORE_PATHS_ENV] = "custom;tmp/**;  logs  "
+    expect(defaultIgnoreList()).toEqual(["custom", "tmp/**", "logs"])
+  })
+
+  it("uses empty list when env var is present but empty", () => {
+    process.env[IGNORE_PATHS_ENV] = ""
+    expect(defaultIgnoreList()).toEqual([])
+  })
+})
+
 describe("ignored", () => {
   it("ignores default dirs like node_modules", () => {
-    expect(ignored("node_modules/pkg.js", "pkg.js", [])).toBe(true)
+    expect(ignored("node_modules/pkg.js", [])).toBe(true)
   })
 
   it("ignores nested default dirs", () => {
-    expect(ignored("foo/node_modules/bar.js", "bar.js", [])).toBe(true)
+    expect(ignored("foo/node_modules/bar.js", [])).toBe(true)
   })
 
   it("does not ignore normal paths", () => {
-    expect(ignored("src/index.ts", "index.ts", [])).toBe(false)
+    expect(ignored("src/index.ts", [])).toBe(false)
   })
 
-  it("respects custom matchers", () => {
-    const matchers = compile(["*.log"])
-    expect(ignored("app.log", "app.log", matchers)).toBe(true)
+  it("respects custom matchers with relative-path semantics", () => {
+    const matchers = compile(["**/*.log"])
+    expect(ignored("app.log", matchers)).toBe(true)
+    expect(ignored("logs/app.log", matchers)).toBe(true)
   })
 })
 
-// ---------------------------------------------------------------------------
-// blocked
-// ---------------------------------------------------------------------------
 describe("blocked", () => {
   it("blocks system paths when base is /", () => {
     expect(blocked("/dev", "/")).toBe(true)
@@ -180,13 +178,9 @@ describe("blocked", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// walk
-// ---------------------------------------------------------------------------
 describe("walk", () => {
   it("lists all entries recursively by default", async () => {
-    const items = await walk(tmp)
-    const names = items.map((i) => relPath(tmp, i.path))
+    const names = (await walk(tmp)).map((i) => relPath(tmp, i.path))
     expect(names).toContain("hello.txt")
     expect(names).toContain("src")
     expect(names).toContain("src/index.ts")
@@ -194,58 +188,72 @@ describe("walk", () => {
   })
 
   it("skips default-ignored dirs", async () => {
-    const items = await walk(tmp)
-    const names = items.map((i) => relPath(tmp, i.path))
+    const names = (await walk(tmp)).map((i) => relPath(tmp, i.path))
     expect(names).not.toContain("node_modules")
     expect(names).not.toContain("node_modules/pkg.js")
   })
 
+  it("disables built-in default ignores when env var is empty", async () => {
+    process.env[IGNORE_PATHS_ENV] = ""
+    const names = (await walk(tmp)).map((i) => relPath(tmp, i.path))
+    expect(names).toContain("node_modules")
+    expect(names).toContain("node_modules/pkg.js")
+  })
+
   it("non-recursive lists only top level", async () => {
-    const items = await walk(tmp, { recursive: false })
-    const names = items.map((i) => relPath(tmp, i.path))
+    const names = (await walk(tmp, { recursive: false })).map((i) => relPath(tmp, i.path))
     expect(names).toContain("hello.txt")
     expect(names).toContain("src")
     expect(names).not.toContain("src/index.ts")
   })
 
   it("filters by type: files", async () => {
-    const items = await walk(tmp, { type: "files" })
-    expect(items.every((i) => !i.dir)).toBe(true)
+    expect((await walk(tmp, { type: "files" })).every((i) => !i.dir)).toBe(true)
   })
 
   it("filters by type: directories", async () => {
-    const items = await walk(tmp, { type: "directories" })
-    expect(items.every((i) => i.dir)).toBe(true)
+    expect((await walk(tmp, { type: "directories" })).every((i) => i.dir)).toBe(true)
   })
 
-  it("respects include filter", async () => {
+  it("respects include filter with root-relative semantics", async () => {
     const items = await walk(tmp, { type: "files", include: ["*.ts"] })
+    expect(items.map((i) => relPath(tmp, i.path))).toEqual([])
+  })
+
+  it("respects recursive include filter", async () => {
+    const items = await walk(tmp, { type: "files", include: ["**/*.ts"] })
     expect(items.every((i) => i.path.endsWith(".ts"))).toBe(true)
     expect(items.length).toBeGreaterThan(0)
   })
 
   it("respects exclude filter", async () => {
-    const items = await walk(tmp, { type: "files", exclude: ["*.txt"] })
+    const items = await walk(tmp, { type: "files", exclude: ["**/*.txt"] })
     expect(items.every((i) => !i.path.endsWith(".txt"))).toBe(true)
   })
 
+  it("does not traverse excluded directories", async () => {
+    const names = (await walk(tmp, { exclude: ["src/lib", "src/lib/**"] })).map((i) => relPath(tmp, i.path))
+    expect(names).not.toContain("src/lib")
+    expect(names).not.toContain("src/lib/helper.ts")
+  })
+
+  it("includes matching directories while still traversing unmatched parents", async () => {
+    const names = (await walk(tmp, { type: "directories", include: ["src/lib"] })).map((i) => relPath(tmp, i.path))
+    expect(names).toEqual(["src/lib"])
+  })
+
   it("respects ignore patterns", async () => {
-    const items = await walk(tmp, { ignore: ["*.ts"] })
-    const names = items.map((i) => relPath(tmp, i.path))
+    const names = (await walk(tmp, { ignore: ["src/**/*.ts"] })).map((i) => relPath(tmp, i.path))
     expect(names).not.toContain("src/index.ts")
   })
 
   it("skips symbolic links", async () => {
-    const items = await walk(tmp, { type: "files" })
-    const names = items.map((i) => relPath(tmp, i.path))
+    const names = (await walk(tmp, { type: "files" })).map((i) => relPath(tmp, i.path))
     expect(names).toContain("hello.txt")
     expect(names).not.toContain("hello-link.txt")
   })
 })
 
-// ---------------------------------------------------------------------------
-// binary
-// ---------------------------------------------------------------------------
 describe("binary", () => {
   it("detects binary by extension", async () => {
     expect(await binary(path.join(tmp, "photo.png"))).toBe(true)
@@ -268,9 +276,6 @@ describe("binary", () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// formatTree
-// ---------------------------------------------------------------------------
 describe("formatTree", () => {
   it("renders a tree with directories and files", () => {
     const items = [
@@ -290,8 +295,7 @@ describe("formatTree", () => {
   })
 
   it("handles empty items", () => {
-    const tree = formatTree(tmp, [])
-    expect(tree).toBe(`${tmp}/`)
+    expect(formatTree(tmp, [])).toBe(`${tmp}/`)
   })
 
   it("renders exact indentation and ordering", () => {
@@ -302,16 +306,14 @@ describe("formatTree", () => {
       { path: path.join(tmp, "src", "lib", "helper.ts"), dir: false },
       { path: path.join(tmp, "hello.txt"), dir: false },
     ]
-    expect(formatTree(tmp, items)).toBe(
-      [
-        `${tmp}/`,
-        "  src/",
-        "    lib/",
-        "      helper.ts",
-        "    index.ts",
-        "  hello.txt",
-      ].join("\n"),
-    )
+    expect(formatTree(tmp, items)).toBe([
+      `${tmp}/`,
+      "  src/",
+      "    lib/",
+      "      helper.ts",
+      "    index.ts",
+      "  hello.txt",
+    ].join("\n"))
   })
 })
 
