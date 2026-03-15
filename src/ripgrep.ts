@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises"
 import { Minimatch } from "minimatch"
 import { formatError } from "./errors"
-import { resolveExecutable, runSubprocess } from "./subprocess"
+import { DEFAULT_EXECUTABLE_DIRS, resolveExecutable, runSubprocess, type RunSubprocessResult } from "./subprocess"
 import { blocked, compile, defaultIgnoreList, ignored, matchesPattern, relPath, walk } from "./utils"
 
 export const RIPGREP_TIMEOUT_MS = 60_000
@@ -41,7 +41,7 @@ type GlobEntry = {
   time: number
 }
 
-export const isErrorResult = (value: RipgrepMatch[] | string): value is string => typeof value === "string"
+export const isErrorResult = <T>(value: T | string): value is string => typeof value === "string"
 
 const decodeText = (value?: TextValue) => {
   if (!value) return ""
@@ -54,15 +54,18 @@ const trimLineEnding = (line: string) => line.replace(/\r?\n$/, "")
 
 const ripgrepError = (details: string) => formatError("filesystem_error", "Filesystem operation failed", [["details", details]])
 
-async function runRipgrep(args: string[]) {
+const ripgrepNotFoundDetail = () =>
+  `ripgrep executable not found in PATH or fallback locations: ${DEFAULT_EXECUTABLE_DIRS.join(", ")}. Install ripgrep or add it to PATH.`
+
+async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise<RunSubprocessResult | string> {
   const executable = await resolveExecutable("rg")
-  if (!executable) return ripgrepError("ripgrep executable not found in PATH")
+  if (!executable) return ripgrepError(ripgrepNotFoundDetail())
 
   const result = await runSubprocess({
     command: executable,
     args,
-    baseDir: "/",
-    cwd: "/",
+    baseDir,
+    cwd,
     timeoutMs: RIPGREP_TIMEOUT_MS,
     maxOutputBytes: RIPGREP_MAX_OUTPUT_BYTES,
   })
@@ -76,8 +79,8 @@ async function runRipgrep(args: string[]) {
 
 const sortEntries = (items: GlobEntry[]) => items.sort((a, b) => b.time - a.time)
 
-const collectFileEntries = async (dir: string) => {
-  const result = await runRipgrep(["--files", "--hidden", "--no-ignore", "--no-messages", "--sortr", "modified", dir])
+const collectFileEntries = async (baseDir: string, dir: string) => {
+  const result = await runRipgrep(baseDir, dir, ["--files", "--hidden", "--no-ignore", "--no-messages", "--sortr", "modified", dir])
   if (isErrorResult(result)) return result
   if (result.exitCode !== 0) return ripgrepError(result.stderr || `ripgrep exited with code ${result.exitCode}`)
 
@@ -107,7 +110,7 @@ export async function grepWithRipgrep({
 }): Promise<RipgrepMatch[] | string> {
   if (blocked(dir, baseDir)) return []
 
-  const result = await runRipgrep(["--json", "--engine", "auto", "--hidden", "--no-ignore", "--no-messages", "--sortr", "modified", pattern, dir])
+  const result = await runRipgrep(baseDir, dir, ["--json", "--engine", "auto", "--hidden", "--no-ignore", "--no-messages", "--sortr", "modified", "--", pattern, dir])
   if (isErrorResult(result)) return result
   if (result.exitCode === 2) {
     return formatError("invalid_pattern", "Invalid regular expression", [["pattern", pattern], ["details", result.stderr || "ripgrep rejected the pattern"]])
@@ -167,7 +170,7 @@ export async function globWithRipgrep({
   const entries: GlobEntry[] = []
 
   if (kind !== "directories") {
-    const files = await collectFileEntries(dir)
+    const files = await collectFileEntries(baseDir, dir)
     if (isErrorResult(files)) return files
 
     for (const file of files) {
