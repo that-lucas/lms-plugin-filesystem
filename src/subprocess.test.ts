@@ -12,6 +12,7 @@ beforeAll(async () => {
   outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-subprocess-outside-"))
 
   await fs.mkdir(path.join(baseDir, "subdir"), { recursive: true })
+  await fs.symlink(path.join(baseDir, "subdir"), path.join(baseDir, "inside-link"))
   await fs.symlink(outsideDir, path.join(baseDir, "outside-link"))
 })
 
@@ -124,6 +125,18 @@ describe("runSubprocess", () => {
       args: ["-e", 'process.stdout.write(process.cwd())'],
       baseDir,
       cwd: "subdir",
+    })
+
+    expect(result.stdout).toBe(realSubdir)
+  })
+
+  it("returns the canonical cwd after validating a symlink within the base directory", async () => {
+    const realSubdir = await fs.realpath(path.join(baseDir, "subdir"))
+    const result = await runSubprocess({
+      command: process.execPath,
+      args: ["-e", 'process.stdout.write(process.cwd())'],
+      baseDir,
+      cwd: "inside-link",
     })
 
     expect(result.stdout).toBe(realSubdir)

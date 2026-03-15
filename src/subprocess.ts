@@ -81,7 +81,7 @@ const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {
     throw new Error(`Working directory is outside the configured base directory: ${resolved}`)
   }
 
-  return resolved
+  return realCwd
 }
 
 export async function runSubprocess({

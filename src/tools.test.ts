@@ -148,6 +148,7 @@ beforeAll(async () => {
 
   await fs.mkdir(path.join(tmp, "src"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "index.ts"), 'export const main = () => "hello"\n')
+  await fs.writeFile(path.join(tmp, "src", "MixedCase.TS"), "export const MIXED = true\n")
   await fs.writeFile(path.join(tmp, "src", "utils.ts"), "export const add = (a: number, b: number) => a + b\n")
   await fs.mkdir(path.join(tmp, "src", "lib"), { recursive: true })
   await fs.writeFile(path.join(tmp, "src", "lib", "helper.ts"), "export function help() {}\n")
@@ -176,6 +177,7 @@ beforeAll(async () => {
     [path.join("src", "lib", "helper.ts"), -30_000],
     [path.join("src", "utils.ts"), -20_000],
     [path.join("src", "index.ts"), -10_000],
+    [path.join("src", "MixedCase.TS"), -12_000],
     ["big.txt", 0],
     ["multi-match.ts", 10_000],
     ["data.bin", -5_000],
@@ -333,8 +335,8 @@ describe("list tool", () => {
       path: tmp,
       type: "directory",
       offset: 1,
-      limit: 14,
-      total: 14,
+      limit: 15,
+      total: 15,
       hasMore: false,
       nextOffset: undefined,
       entries: [
@@ -345,6 +347,7 @@ describe("list tool", () => {
         "      helper.ts",
         "    existing.ts",
         "    index.ts",
+        "    MixedCase.TS",
         "    utils.ts",
         "  big.txt",
         "  data.bin",
@@ -362,6 +365,7 @@ describe("list tool", () => {
         "      helper.ts",
         "    existing.ts",
         "    index.ts",
+        "    MixedCase.TS",
         "    utils.ts",
         "  big.txt",
         "  data.bin",
@@ -455,6 +459,7 @@ describe("glob tool", () => {
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "MixedCase.TS"),
       path.join(tmp, "src", "existing.ts"),
       path.join(tmp, "src", "utils.ts"),
       path.join(tmp, "src", "lib", "helper.ts"),
@@ -482,6 +487,7 @@ describe("glob tool", () => {
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "MixedCase.TS"),
       path.join(tmp, "src", "existing.ts"),
       path.join(tmp, "src", "utils.ts"),
       path.join(tmp, "src", "lib", "helper.ts"),
@@ -494,6 +500,7 @@ describe("glob tool", () => {
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
       path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "MixedCase.TS"),
       path.join(tmp, "src", "existing.ts"),
       path.join(tmp, "src", "utils.ts"),
       path.join(tmp, "search-me.ts"),
@@ -569,6 +576,7 @@ describe("grep tool", () => {
     const result = await tools.grep({ pattern: "export", path: tmp, include: ["**/*.ts"] })
     expect(parseGrep(result).matches).toEqual([
       { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
+      { path: path.join(tmp, "src", "MixedCase.TS"), line: 1, text: "export const MIXED = true" },
       { path: path.join(tmp, "src", "utils.ts"), line: 1, text: "export const add = (a: number, b: number) => a + b" },
       { path: path.join(tmp, "src", "lib", "helper.ts"), line: 1, text: "export function help() {}" },
     ])
@@ -578,6 +586,7 @@ describe("grep tool", () => {
     const result = await tools.grep({ pattern: "export", path: tmp, exclude: ["src/lib", "src/lib/**"] })
     expect(parseGrep(result).matches).toEqual([
       { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
+      { path: path.join(tmp, "src", "MixedCase.TS"), line: 1, text: "export const MIXED = true" },
       { path: path.join(tmp, "src", "utils.ts"), line: 1, text: "export const add = (a: number, b: number) => a + b" },
     ])
   })
