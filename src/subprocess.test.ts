@@ -45,6 +45,19 @@ describe("runSubprocess", () => {
     }
   })
 
+  it("returns absolute paths when PATH entries are relative", async () => {
+    const toolDir = await fs.mkdtemp(path.join(process.cwd(), "fs-plugin-relative-bin-"))
+    const toolName = path.basename(toolDir)
+    const toolPath = path.join(toolDir, "fake-rg")
+
+    try {
+      await fs.writeFile(toolPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+      await expect(resolveExecutable("fake-rg", `./${toolName}`, [])).resolves.toBe(toolPath)
+    } finally {
+      await fs.rm(toolDir, { recursive: true, force: true })
+    }
+  })
+
   it("runs a subprocess successfully", async () => {
     const result = await runSubprocess({
       command: process.execPath,
@@ -175,6 +188,18 @@ describe("runSubprocess", () => {
     })
 
     expect(result.stdout).toBe("HELLO")
+  })
+
+  it("ignores stdin stream errors when the child exits early", async () => {
+    const result = await runSubprocess({
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      baseDir,
+      stdin: "hello",
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.timedOut).toBe(false)
   })
 
   it("requires an absolute command path", async () => {

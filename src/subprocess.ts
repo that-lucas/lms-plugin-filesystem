@@ -39,17 +39,26 @@ export async function resolveExecutable(command: string, envPath = process.env.P
   if (command.length === 0) throw new Error("Command must not be empty")
   if (path.isAbsolute(command)) return command
 
+  const candidates =
+    process.platform === "win32"
+      ? [command, ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter((ext) => ext.length > 0).map((ext) => `${command}${ext}`)]
+      : [command]
+
   const dirs = [...(envPath || "").split(path.delimiter), ...fallbackDirs]
     .filter((item) => item.length > 0)
     .filter((item, index, all) => all.indexOf(item) === index)
 
   for (const dir of dirs) {
-    const full = path.join(dir, command)
-    const stat = await fs.stat(full).catch(() => undefined)
-    if (!stat?.isFile()) continue
-    const executable = await fs.access(full, fsConstants.X_OK).then(() => true).catch(() => false)
-    if (!executable) continue
-    return full
+    for (const candidate of candidates) {
+      const full = path.resolve(dir, candidate)
+      const stat = await fs.stat(full).catch(() => undefined)
+      if (!stat?.isFile()) continue
+      const executable = process.platform === "win32"
+        ? true
+        : await fs.access(full, fsConstants.X_OK).then(() => true).catch(() => false)
+      if (!executable) continue
+      return full
+    }
   }
 
   return undefined
@@ -164,6 +173,7 @@ export async function runSubprocess({
 
     child.stdout.on("data", (chunk) => appendChunk(stdoutChunks, chunk))
     child.stderr.on("data", (chunk) => appendChunk(stderrChunks, chunk))
+    child.stdin.on("error", () => {})
 
     child.on("error", (error) => {
       finish({
