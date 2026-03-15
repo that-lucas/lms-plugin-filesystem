@@ -7,6 +7,7 @@ import { Minimatch } from "minimatch"
 import { z } from "zod"
 import { configSchematics } from "./config"
 import { formatError, formatOutput, isErrorOutput, outputPayload } from "./errors"
+import { grepWithRipgrep, isErrorResult } from "./ripgrep"
 import {
   READ_LIMIT,
   FILE_LIMIT,
@@ -256,45 +257,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const stat = await fs.stat(dir).catch(() => undefined)
         if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
         if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
-        let regex: RegExp
-        try {
-          regex = new RegExp(pattern, "u")
-        } catch (error) {
-          return formatError("invalid_pattern", "Invalid regular expression", [["pattern", pattern], ["details", error instanceof Error ? error.message : String(error)]])
-        }
-        const files = await walk(dir, { recursive: true, type: "files", include, exclude })
-        const orderedFiles = await Promise.all(
-          files.map(async (file) => ({
-            path: file.path,
-            time: (await fs.stat(file.path)).mtime.getTime(),
-          })),
-        )
-        orderedFiles.sort((a, b) => b.time - a.time)
-        const matches: { path: string; line: number; text: string }[] = []
-        for (const file of orderedFiles) {
-          if (await binary(file.path)) continue
-          const stream = createReadStream(file.path, { encoding: "utf8" })
-          const rl = createInterface({ input: stream, crlfDelay: Infinity })
-          let lineNumber = 0
-          try {
-            for await (const line of rl) {
-              lineNumber += 1
-              if (!regex.test(line)) {
-                regex.lastIndex = 0
-                continue
-              }
-              matches.push({
-                path: file.path,
-                line: lineNumber,
-                text: line,
-              })
-              regex.lastIndex = 0
-            }
-          } finally {
-            rl.close()
-            stream.destroy()
-          }
-        }
+        const matches = await grepWithRipgrep({ baseDir: base, dir, pattern, include, exclude })
+        if (isErrorResult(matches)) return matches
         const fileCount = new Set(matches.map((match) => match.path)).size
         const out: Array<ReturnType<typeof outputPayload> | [string, string | number | boolean | undefined]> = [
           ["path", dir],

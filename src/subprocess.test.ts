@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import * as fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { runSubprocess } from "./subprocess"
+import { resolveExecutable, runSubprocess } from "./subprocess"
 
 let baseDir: string
 let outsideDir: string
@@ -21,6 +21,30 @@ afterAll(async () => {
 })
 
 describe("runSubprocess", () => {
+  it("resolves executables from PATH entries", async () => {
+    const toolDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-bin-"))
+    const toolPath = path.join(toolDir, "fake-rg")
+
+    try {
+      await fs.writeFile(toolPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+      await expect(resolveExecutable("fake-rg", toolDir, [])).resolves.toBe(toolPath)
+    } finally {
+      await fs.rm(toolDir, { recursive: true, force: true })
+    }
+  })
+
+  it("resolves executables from fallback directories when PATH is empty", async () => {
+    const toolDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-fallback-bin-"))
+    const toolPath = path.join(toolDir, "fake-rg")
+
+    try {
+      await fs.writeFile(toolPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+      await expect(resolveExecutable("fake-rg", "", [toolDir])).resolves.toBe(toolPath)
+    } finally {
+      await fs.rm(toolDir, { recursive: true, force: true })
+    }
+  })
+
   it("runs a subprocess successfully", async () => {
     const result = await runSubprocess({
       command: process.execPath,

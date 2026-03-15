@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { constants as fsConstants } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
 import { resolvePath } from "./utils"
@@ -6,6 +7,12 @@ import { resolvePath } from "./utils"
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 10_000
 export const DEFAULT_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
 export const SUBPROCESS_KILL_GRACE_MS = 250
+export const DEFAULT_EXECUTABLE_DIRS = [
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+  "/bin",
+]
 
 export type RunSubprocessOptions = {
   command: string
@@ -26,6 +33,26 @@ export type RunSubprocessResult = {
   timedOut: boolean
   truncated: boolean
   spawnError?: string
+}
+
+export async function resolveExecutable(command: string, envPath = process.env.PATH, fallbackDirs = DEFAULT_EXECUTABLE_DIRS) {
+  if (command.length === 0) throw new Error("Command must not be empty")
+  if (path.isAbsolute(command)) return command
+
+  const dirs = [...(envPath || "").split(path.delimiter), ...fallbackDirs]
+    .filter((item) => item.length > 0)
+    .filter((item, index, all) => all.indexOf(item) === index)
+
+  for (const dir of dirs) {
+    const full = path.join(dir, command)
+    const stat = await fs.stat(full).catch(() => undefined)
+    if (!stat?.isFile()) continue
+    const executable = await fs.access(full, fsConstants.X_OK).then(() => true).catch(() => false)
+    if (!executable) continue
+    return full
+  }
+
+  return undefined
 }
 
 const withinBase = (base: string, target: string) => {
