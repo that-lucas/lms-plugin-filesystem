@@ -3,18 +3,16 @@ import { createReadStream, existsSync, type Stats } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
 import { createInterface } from "node:readline"
-import { Minimatch } from "minimatch"
 import { z } from "zod"
 import { configSchematics } from "./config"
 import { formatError, formatOutput, isErrorOutput, outputPayload } from "./errors"
-import { grepWithRipgrep, isErrorResult } from "./ripgrep"
+import { globWithRipgrep, grepWithRipgrep, isErrorResult } from "./ripgrep"
 import {
   READ_LIMIT,
   FILE_LIMIT,
   PathOutsideBaseError,
   expandHome,
   resolvePath,
-  relPath,
   walk,
   binary,
   formatTree,
@@ -203,26 +201,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const stat = await fs.stat(dir).catch(() => undefined)
         if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
         if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
-        const matcher = new Minimatch(pattern, { dot: true, nocase: true })
         const kind = type ?? "files"
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
-        const found = (await walk(dir, { recursive: true, type: kind, include, exclude })).filter((file) => {
-          const rel = relPath(dir, file.path)
-          return matcher.match(rel)
-        })
-        const files = await Promise.all(
-          found.map(async (file) => ({
-            path: file.path,
-            time: (await fs.stat(file.path)).mtime.getTime(),
-          })),
-        )
-        files.sort((a, b) => b.time - a.time)
+        const files = await globWithRipgrep({ baseDir: base, dir, pattern, type: kind, include, exclude })
+        if (isErrorResult(files)) return files
         if (files.length < (offset ?? 1) && !(files.length === 0 && (offset ?? 1) === 1)) {
           return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", files.length], ["unit", "entries"]])
         }
         const slice = files.slice(start, start + size)
-        const lines = slice.map((item) => item.path).join("\n")
+        const lines = slice.join("\n")
         const hasMore = start + slice.length < files.length
         return formatOutput([
           ["path", dir],
