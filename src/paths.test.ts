@@ -91,10 +91,10 @@ describe("home-relative paths", () => {
     expect(result).toContain("sub/")
   })
 
-  it("glob accepts ~/... path with standard root matching", async () => {
+  it("glob accepts ~/... path with ripgrep file glob semantics", async () => {
     const result = await tools.glob({ pattern: "*.ts", path: HOME_REL })
     expect(result).toContain("root.ts")
-    expect(result).not.toContain("data.ts")
+    expect(result).toContain("data.ts")
   })
 
   it("grep accepts ~/... path", async () => {

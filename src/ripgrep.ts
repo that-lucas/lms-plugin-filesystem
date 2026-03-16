@@ -121,8 +121,14 @@ async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise
 
 const sortEntries = (items: GlobEntry[]) => items.sort((a, b) => b.time - a.time)
 
-const collectFileEntries = async (baseDir: string, dir: string) => {
+const collectFileEntries = async (baseDir: string, dir: string, pattern: string, include?: string[], exclude?: string[]) => {
   const defaults = defaultIgnoreList()
+  const userGlobs = [
+    "--glob",
+    pattern,
+    ...(include || []).flatMap((item) => ["--glob", item]),
+    ...(exclude || []).flatMap((item) => ["--glob", `!${item}`]),
+  ]
   const result = await runRipgrep(baseDir, dir, [
     "--files",
     "--hidden",
@@ -131,6 +137,7 @@ const collectFileEntries = async (baseDir: string, dir: string) => {
     "--sortr",
     "modified",
     ...ripgrepGlobArgs(dir, defaults),
+    ...userGlobs,
     ".",
   ])
   if (isErrorResult(result)) return result
@@ -232,24 +239,13 @@ export async function globWithRipgrep({
 
   const matcher = new Minimatch(pattern, { dot: true, nocase: true })
   const kind = type ?? "files"
-  const includeMatchers = compile(include)
-  const excludeMatchers = compile(exclude)
-  const defaults = defaultIgnoreList()
-  const defaultMatchers = compile(defaults)
   const entries: GlobEntry[] = []
 
   if (kind !== "directories") {
-    const files = await collectFileEntries(baseDir, dir)
+    const files = await collectFileEntries(baseDir, dir, pattern, include, exclude)
     if (isErrorResult(files)) return files
 
-    for (const file of files) {
-      const rel = relPath(dir, file.path)
-      if (ignored(rel, [], defaults, defaultMatchers)) continue
-      if (matchesPattern(rel, excludeMatchers)) continue
-      if (includeMatchers.length > 0 && !matchesPattern(rel, includeMatchers)) continue
-      if (!matcher.match(rel)) continue
-      entries.push(file)
-    }
+    entries.push(...files)
   }
 
   if (kind !== "files") {
