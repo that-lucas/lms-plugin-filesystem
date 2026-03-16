@@ -3,7 +3,7 @@ import path from "node:path"
 import { Minimatch } from "minimatch"
 import { formatError } from "./errors"
 import { DEFAULT_EXECUTABLE_DIRS, resolveExecutable, runSubprocess, type RunSubprocessResult } from "./subprocess"
-import { blocked, compile, defaultIgnoreList, ignored, matchesPattern, relPath, walk } from "./utils"
+import { blocked, compile, defaultIgnoreList, ignored, matchesPattern, relPath, SYSTEM_IGNORES, walk } from "./utils"
 
 export const RIPGREP_TIMEOUT_MS = 60_000
 export const RIPGREP_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
@@ -57,20 +57,37 @@ const ripgrepError = (details: string) => formatError("filesystem_error", "Files
 
 const normalizeRipgrepPath = (dir: string, filePath: string) => path.isAbsolute(filePath) ? filePath : path.resolve(dir, filePath)
 
-const ripgrepGlobArgs = (defaults: string[], include?: string[], exclude?: string[]) => {
+const GLOB_META = /[*?{[!(]/
+
+const isGlobPattern = (pattern: string) => GLOB_META.test(pattern)
+
+const addAnchoredPattern = (args: string[], pattern: string) => {
+  const anchored = pattern.startsWith("/") ? pattern : `/${pattern}`
+  args.push("--glob", `!${anchored}`)
+  if (!isGlobPattern(pattern) || pattern.endsWith("/")) args.push("--glob", `!${anchored}/**`)
+}
+
+const ripgrepGlobArgs = (cwd: string, defaults: string[]) => {
   const args: string[] = []
 
   for (const pattern of defaults) {
-    args.push("--glob", `!**/${pattern}`)
-    args.push("--glob", `!**/${pattern}/**`)
+    if (!pattern.includes("/") && !isGlobPattern(pattern)) {
+      args.push("--glob", `!**/${pattern}`)
+      args.push("--glob", `!**/${pattern}/**`)
+      continue
+    }
+    addAnchoredPattern(args, pattern)
   }
 
-  for (const pattern of exclude || []) {
-    args.push("--glob", `!${pattern}`)
-  }
-
-  for (const pattern of include || []) {
-    args.push("--glob", pattern)
+  for (const systemPath of SYSTEM_IGNORES) {
+    const rel = path.relative(cwd, systemPath)
+    if (rel === "" || rel === ".") {
+      args.push("--glob", "!*")
+      args.push("--glob", "!**/*")
+      continue
+    }
+    if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue
+    addAnchoredPattern(args, rel.split(path.sep).join("/"))
   }
 
   return args
@@ -78,6 +95,9 @@ const ripgrepGlobArgs = (defaults: string[], include?: string[], exclude?: strin
 
 const ripgrepNotFoundDetail = () =>
   `ripgrep executable not found in PATH or fallback locations: ${DEFAULT_EXECUTABLE_DIRS.join(", ")}. Install ripgrep or add it to PATH.`
+
+const isRegexParseFailure = (stderr: string) =>
+  stderr.includes("regex parse error") || stderr.includes("could not be compiled") || stderr.includes("error compiling pattern")
 
 async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise<RunSubprocessResult | string> {
   const executable = await resolveExecutable("rg")
@@ -101,17 +121,16 @@ async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise
 
 const sortEntries = (items: GlobEntry[]) => items.sort((a, b) => b.time - a.time)
 
-const collectFileEntries = async (baseDir: string, dir: string, include?: string[], exclude?: string[]) => {
+const collectFileEntries = async (baseDir: string, dir: string) => {
   const defaults = defaultIgnoreList()
   const result = await runRipgrep(baseDir, dir, [
     "--files",
     "--hidden",
     "--no-ignore",
-    "--glob-case-insensitive",
     "--no-messages",
     "--sortr",
     "modified",
-    ...ripgrepGlobArgs(defaults, include, exclude),
+    ...ripgrepGlobArgs(dir, defaults),
     ".",
   ])
   if (isErrorResult(result)) return result
@@ -152,17 +171,18 @@ export async function grepWithRipgrep({
     "auto",
     "--hidden",
     "--no-ignore",
-    "--glob-case-insensitive",
-    "--no-messages",
     "--sortr",
     "modified",
-    ...ripgrepGlobArgs(defaults, include, exclude),
+    ...ripgrepGlobArgs(dir, defaults),
     "--",
     pattern,
     ".",
   ])
   if (isErrorResult(result)) return result
   if (result.exitCode === 2) {
+    if (!isRegexParseFailure(result.stderr)) {
+      return ripgrepError(result.stderr || "ripgrep failed before completing the search")
+    }
     return formatError("invalid_pattern", "Invalid regular expression", [["pattern", pattern], ["details", result.stderr || "ripgrep rejected the pattern"]])
   }
   if (result.exitCode !== 0 && result.exitCode !== 1) return ripgrepError(result.stderr || `ripgrep exited with code ${result.exitCode}`)
@@ -219,7 +239,7 @@ export async function globWithRipgrep({
   const entries: GlobEntry[] = []
 
   if (kind !== "directories") {
-    const files = await collectFileEntries(baseDir, dir, include, exclude)
+    const files = await collectFileEntries(baseDir, dir)
     if (isErrorResult(files)) return files
 
     for (const file of files) {

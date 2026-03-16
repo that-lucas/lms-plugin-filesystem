@@ -18,11 +18,14 @@ import {
   defaultIgnoreList,
   matchesPattern,
 } from "./utils"
+import { createLink, detectLinkSupport, type LinkSupport } from "./testSupport"
 
 let tmp: string
+let linkSupport: LinkSupport
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-test-"))
+  linkSupport = await detectLinkSupport(path.join(tmp, "utils-link-check"))
 
   await fs.writeFile(path.join(tmp, "hello.txt"), "hello world\n")
   await fs.writeFile(path.join(tmp, "empty.txt"), "")
@@ -49,7 +52,9 @@ beforeAll(async () => {
   await fs.mkdir(path.join(tmp, "a", "b", "c"), { recursive: true })
   await fs.writeFile(path.join(tmp, "a", "b", "c", "deep.txt"), "deep\n")
 
-  await fs.symlink(path.join(tmp, "hello.txt"), path.join(tmp, "hello-link.txt"))
+  if (linkSupport.symlinks) {
+    await createLink(path.join(tmp, "hello.txt"), path.join(tmp, "hello-link.txt"))
+  }
 })
 
 beforeEach(() => {
@@ -259,6 +264,7 @@ describe("walk", () => {
   })
 
   it("skips symbolic links", async () => {
+    if (!linkSupport.symlinks) return
     const names = (await walk(tmp, { type: "files" })).map((i) => relPath(tmp, i.path))
     expect(names).toContain("hello.txt")
     expect(names).not.toContain("hello-link.txt")

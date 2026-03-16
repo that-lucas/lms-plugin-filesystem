@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { toolsProvider } from "./toolsProvider"
+import { createLink, detectLinkSupport, type LinkSupport } from "./testSupport"
 
 let tmp: string
 let outsideTmp: string
 let tools: Record<string, (params: any) => Promise<string>>
+let linkSupport: LinkSupport
 
 type FlatRecord = {
   fields: Record<string, string>
@@ -136,6 +138,7 @@ const parseEdit = (output: string) => parseFlat(output).fields
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-tools-"))
   outsideTmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-tools-outside-"))
+  linkSupport = await detectLinkSupport(path.join(tmp, "tools-link-check"))
 
   await fs.writeFile(path.join(tmp, "hello.txt"), "line 1\nline 2\nline 3\nline 4\nline 5\n")
   await fs.writeFile(path.join(tmp, "empty.txt"), "")
@@ -154,10 +157,12 @@ beforeAll(async () => {
   await fs.writeFile(path.join(tmp, "src", "lib", "helper.ts"), "export function help() {}\n")
   await fs.writeFile(path.join(tmp, "src", "existing.ts"), "existing\n")
   await fs.mkdir(path.join(tmp, "src", "existing-dir"), { recursive: true })
-  await fs.symlink(path.join(outsideTmp, "outside-read.txt"), path.join(tmp, "read-link.txt"))
-  await fs.symlink(path.join(outsideTmp, "outside-edit.txt"), path.join(tmp, "edit-link.txt"))
-  await fs.symlink(path.join(outsideTmp, "outside-write.txt"), path.join(tmp, "write-link.txt"))
-  await fs.symlink(outsideTmp, path.join(tmp, "linked-outside-dir"))
+  if (linkSupport.symlinks) {
+    await createLink(path.join(outsideTmp, "outside-read.txt"), path.join(tmp, "read-link.txt"))
+    await createLink(path.join(outsideTmp, "outside-edit.txt"), path.join(tmp, "edit-link.txt"))
+    await createLink(path.join(outsideTmp, "outside-write.txt"), path.join(tmp, "write-link.txt"))
+    await createLink(outsideTmp, path.join(tmp, "linked-outside-dir"), "dir")
+  }
 
   const buf = Buffer.alloc(64)
   buf[0] = 0
@@ -278,6 +283,7 @@ describe("read tool", () => {
   })
 
   it("returns error for symbolic links", async () => {
+    if (!linkSupport.symlinks) return
     const result = await tools.read({ filePath: path.join(tmp, "read-link.txt") })
     expect(parseError(result)).toMatchObject({
       code: "wrong_type",
@@ -717,6 +723,7 @@ describe("create tool", () => {
   })
 
   it("returns error when file target is a symbolic link", async () => {
+    if (!linkSupport.symlinks) return
     const target = path.join(tmp, "write-link.txt")
     const result = await tools.create({ type: "file", path: target, content: "new", overwrite: true })
     expect(parseError(result)).toMatchObject({
@@ -727,6 +734,7 @@ describe("create tool", () => {
   })
 
   it("returns error when file parent resolves outside base through a symlink", async () => {
+    if (!linkSupport.symlinks) return
     const target = path.join(tmp, "linked-outside-dir", "new.txt")
     const result = await tools.create({ type: "file", path: target, content: "new" })
     expect(parseError(result)).toMatchObject({
@@ -937,6 +945,7 @@ describe("edit tool", () => {
   })
 
   it("returns error for symbolic links", async () => {
+    if (!linkSupport.symlinks) return
     const target = path.join(tmp, "edit-link.txt")
     const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({

@@ -3,17 +3,22 @@ import * as fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { resolveExecutable, runSubprocess } from "./subprocess"
+import { createLink, detectLinkSupport, type LinkSupport } from "./testSupport"
 
 let baseDir: string
 let outsideDir: string
+let linkSupport: LinkSupport
 
 beforeAll(async () => {
   baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-subprocess-"))
   outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-subprocess-outside-"))
+  linkSupport = await detectLinkSupport(path.join(baseDir, "subprocess-link-check"))
 
   await fs.mkdir(path.join(baseDir, "subdir"), { recursive: true })
-  await fs.symlink(path.join(baseDir, "subdir"), path.join(baseDir, "inside-link"))
-  await fs.symlink(outsideDir, path.join(baseDir, "outside-link"))
+  if (linkSupport.symlinks) {
+    await createLink(path.join(baseDir, "subdir"), path.join(baseDir, "inside-link"), "dir")
+    await createLink(outsideDir, path.join(baseDir, "outside-link"), "dir")
+  }
 })
 
 afterAll(async () => {
@@ -131,6 +136,7 @@ describe("runSubprocess", () => {
   })
 
   it("returns the canonical cwd after validating a symlink within the base directory", async () => {
+    if (!linkSupport.symlinks) return
     const realSubdir = await fs.realpath(path.join(baseDir, "subdir"))
     const result = await runSubprocess({
       command: process.execPath,
@@ -143,6 +149,7 @@ describe("runSubprocess", () => {
   })
 
   it("rejects symlinked cwd values that escape the base directory", async () => {
+    if (!linkSupport.symlinks) return
     await expect(
       runSubprocess({
         command: process.execPath,

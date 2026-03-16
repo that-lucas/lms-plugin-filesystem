@@ -66,7 +66,7 @@ export async function resolveExecutable(command: string, envPath = process.env.P
 
 const withinBase = (base: string, target: string) => {
   const rel = path.relative(base, target)
-  return !(rel.startsWith("..") || path.isAbsolute(rel))
+  return rel === "" || (!(rel === ".." || rel.startsWith(`..${path.sep}`)) && !path.isAbsolute(rel))
 }
 
 const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {
