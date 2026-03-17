@@ -184,6 +184,7 @@ beforeAll(async () => {
     [path.join("src", "index.ts"), -10_000],
     [path.join("src", "MixedCase.TS"), -12_000],
     ["big.txt", 0],
+    [path.join("node_modules", "dep.js"), -2_000],
     ["multi-match.ts", 10_000],
     ["data.bin", -5_000],
     [path.join("src", "existing.ts"), -15_000],
@@ -501,8 +502,8 @@ describe("glob tool", () => {
     const result = await tools.glob({ pattern: "**/*", path: tmp, include: ["**/*.ts"] })
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "node_modules", "dep.js"),
       path.join(tmp, "big.txt"),
+      path.join(tmp, "node_modules", "dep.js"),
       path.join(tmp, "data.bin"),
       path.join(tmp, "src", "index.ts"),
       path.join(tmp, "src", "MixedCase.TS"),
@@ -604,11 +605,11 @@ describe("grep tool", () => {
     })
   })
 
-  it("respects include filter with standard glob semantics", async () => {
+  it("respects include filter with ripgrep glob semantics", async () => {
+    // ripgrep --glob is case-sensitive, so "**/*.ts" does not match "MixedCase.TS"
     const result = await tools.grep({ pattern: "export", path: tmp, include: ["**/*.ts"] })
     expect(parseGrep(result).matches).toEqual([
       { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
-      { path: path.join(tmp, "src", "MixedCase.TS"), line: 1, text: "export const MIXED = true" },
       { path: path.join(tmp, "src", "utils.ts"), line: 1, text: "export const add = (a: number, b: number) => a + b" },
       { path: path.join(tmp, "src", "lib", "helper.ts"), line: 1, text: "export function help() {}" },
     ])

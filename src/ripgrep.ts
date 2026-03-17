@@ -3,7 +3,7 @@ import path from "node:path"
 import { Minimatch } from "minimatch"
 import { formatError } from "./errors"
 import { DEFAULT_EXECUTABLE_DIRS, resolveExecutable, runSubprocess, type RunSubprocessResult } from "./subprocess"
-import { blocked, compile, defaultIgnoreList, ignored, matchesPattern, relPath, SYSTEM_IGNORES, walk } from "./utils"
+import { blocked, defaultIgnoreList, relPath, SYSTEM_IGNORES, walk } from "./utils"
 
 export const RIPGREP_TIMEOUT_MS = 60_000
 export const RIPGREP_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
@@ -171,6 +171,10 @@ export async function grepWithRipgrep({
   if (blocked(dir, baseDir)) return []
 
   const defaults = defaultIgnoreList()
+  const userGlobs = [
+    ...(include || []).flatMap((item) => ["--glob", item]),
+    ...(exclude || []).flatMap((item) => ["--glob", `!${item}`]),
+  ]
 
   const result = await runRipgrep(baseDir, dir, [
     "--json",
@@ -181,6 +185,7 @@ export async function grepWithRipgrep({
     "--sortr",
     "modified",
     ...ripgrepGlobArgs(dir, defaults),
+    ...userGlobs,
     "--",
     pattern,
     ".",
@@ -194,9 +199,6 @@ export async function grepWithRipgrep({
   }
   if (result.exitCode !== 0 && result.exitCode !== 1) return ripgrepError(result.stderr || `ripgrep exited with code ${result.exitCode}`)
 
-  const includeMatchers = compile(include)
-  const excludeMatchers = compile(exclude)
-  const defaultMatchers = compile(defaults)
   const matches: RipgrepMatch[] = []
 
   for (const rawLine of result.stdout.split(/\r?\n/)) {
@@ -212,10 +214,6 @@ export async function grepWithRipgrep({
     if (event.type !== "match") continue
 
     const filePath = normalizeRipgrepPath(dir, decodeText(event.data?.path))
-    const rel = relPath(dir, filePath)
-    if (ignored(rel, [], defaults, defaultMatchers)) continue
-    if (matchesPattern(rel, excludeMatchers)) continue
-    if (includeMatchers.length > 0 && !matchesPattern(rel, includeMatchers)) continue
 
     matches.push({
       path: filePath,

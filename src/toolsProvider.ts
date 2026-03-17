@@ -189,7 +189,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         pattern: z.string().describe("The path pattern to match, such as \"*.ts\", \"*Tests.ts\", \"src/**\", or \"**/components\"."),
         path: z.string().optional().describe("The directory to search from, such as \"~/my-project\" or \"/Users/john/workspace\"."),
         type: z.enum(["files", "directories", "all"]).optional().describe("What kinds of paths to return: \"files\" (default), \"directories\", or \"all\"."),
-        include: z.array(z.string()).optional().describe("Extra glob patterns that narrow matches to specific parts of the tree relative to path, such as [\"src/**\"] to keep only matches under \"~/my-project/src\", or [\"**/*.ts\"] to keep only TypeScript paths."),
+        include: z.array(z.string()).optional().describe("Extra glob patterns to include in the search, combined with pattern. For example, [\"src/**\"] also includes files under \"~/my-project/src\", or [\"**/*.ts\"] also includes TypeScript paths."),
         exclude: z.array(z.string()).optional().describe("Glob patterns to leave out of the results, such as [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
         offset: z.number().int().min(1).optional().describe("The 1-indexed result number to start from when paging through matches. Default: 1."),
         limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("The maximum number of matches to return in one call. Default: 100."),
