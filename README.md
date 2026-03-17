@@ -25,7 +25,13 @@ Click the "Run in LM Studio" button to add the plugin.
 
 - `glob` and `grep` require `rg` (ripgrep) to be installed on the machine
 
-## Ignored Paths
+## Configuration
+
+### Base Directory
+
+The plugin can be scoped to a base directory through its LM Studio configuration. If not set, the default base directory is the user's home directory (`~/`).
+
+### Ignored Paths
 
 Traversal tools (`list`, `glob`, and `grep`) respect the `LMS_FILESYSTEM_IGNORE_PATHS` environment variable.
 
@@ -43,7 +49,5 @@ If `LMS_FILESYSTEM_IGNORE_PATHS` is set, it replaces the built-in list entirely.
 - If set to an empty value, the built-in ignore list is disabled
 
 ## Notes
-
-The plugin can be scoped to a base directory through its LM Studio configuration. If not set, the default base directory is the user's home directory (`~/`).
 
 The detailed tool definitions and parameter docs are exposed directly to LM Studio through the tool schemas.
