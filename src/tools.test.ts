@@ -544,6 +544,15 @@ describe("glob tool", () => {
     const result = await tools.glob({ pattern: "*", path: path.join(tmp, "nope") })
     expect(parseError(result).code).toBe("not_found")
   })
+
+  it("returns error when directory path resolves outside base through a symlink", async () => {
+    if (!linkSupport.symlinks) return
+    const result = await tools.glob({ pattern: "*", path: path.join(tmp, "linked-outside-dir") })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
+      path: path.join(tmp, "linked-outside-dir"),
+    })
+  })
 })
 
 describe("grep tool", () => {
@@ -648,6 +657,15 @@ describe("grep tool", () => {
   it("returns error for missing directory", async () => {
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "nope") })
     expect(parseError(result).code).toBe("not_found")
+  })
+
+  it("returns error when grep directory resolves outside base through a symlink", async () => {
+    if (!linkSupport.symlinks) return
+    const result = await tools.grep({ pattern: "test", path: path.join(tmp, "linked-outside-dir") })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
+      path: path.join(tmp, "linked-outside-dir"),
+    })
   })
 })
 

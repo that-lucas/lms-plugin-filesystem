@@ -103,14 +103,24 @@ async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise
   const executable = await resolveExecutable("rg")
   if (!executable) return ripgrepError(ripgrepNotFoundDetail())
 
-  const result = await runSubprocess({
-    command: executable,
-    args,
-    baseDir,
-    cwd,
-    timeoutMs: RIPGREP_TIMEOUT_MS,
-    maxOutputBytes: RIPGREP_MAX_OUTPUT_BYTES,
-  })
+  let result: RunSubprocessResult
+  try {
+    result = await runSubprocess({
+      command: executable,
+      args,
+      baseDir,
+      cwd,
+      timeoutMs: RIPGREP_TIMEOUT_MS,
+      maxOutputBytes: RIPGREP_MAX_OUTPUT_BYTES,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const outsidePrefix = "Working directory is outside the configured base directory: "
+    if (message.startsWith(outsidePrefix)) {
+      return formatError("path_outside_base", "Path is outside the configured base directory", [["path", cwd]])
+    }
+    return ripgrepError(message)
+  }
 
   if (result.spawnError) return ripgrepError(result.spawnError)
   if (result.timedOut) return ripgrepError("ripgrep timed out")
