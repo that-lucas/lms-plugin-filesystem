@@ -188,7 +188,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       parameters: {
         pattern: z.string().describe("The path pattern to match, such as \"*.ts\", \"*Tests.ts\", \"src/**\", or \"**/components\"."),
         path: z.string().optional().describe("The directory to search from, such as \"~/my-project\" or \"/Users/john/workspace\"."),
-        type: z.enum(["files", "directories", "all"]).optional().describe("What kinds of paths to return: \"files\" (default), \"directories\", or \"all\". File matches use ripgrep glob semantics; directory matches still use the plugin's existing walker semantics."),
+        type: z.enum(["files", "directories", "all"]).optional().describe("What kinds of paths to return: \"files\" (default), \"directories\", or \"all\"."),
         include: z.array(z.string()).optional().describe("Extra glob patterns to include in the search, combined with pattern. For example, [\"src/**\"] also includes files under \"~/my-project/src\", or [\"**/*.ts\"] also includes TypeScript paths."),
         exclude: z.array(z.string()).optional().describe("Glob patterns to leave out of the results, such as [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
         offset: z.number().int().min(1).optional().describe("The 1-indexed result number to start from when paging through matches. Default: 1."),
