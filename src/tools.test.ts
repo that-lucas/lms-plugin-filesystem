@@ -439,6 +439,15 @@ describe("list tool", () => {
       entriesBytes: Buffer.byteLength([`${tmp}/`, "  big.txt", "  data.bin"].join("\n"), "utf8"),
     })
   })
+
+  it("returns error when list directory resolves outside base through a symlink", async () => {
+    if (!linkSupport.dirLinks) return
+    const result = await tools.list({ path: path.join(tmp, "linked-outside-dir") })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
+      path: path.join(tmp, "linked-outside-dir"),
+    })
+  })
 })
 
 describe("glob tool", () => {
@@ -664,17 +673,6 @@ describe("grep tool", () => {
   it("returns error when grep directory resolves outside base through a symlink", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "linked-outside-dir") })
-    expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
-      path: path.join(tmp, "linked-outside-dir"),
-    })
-  })
-})
-
-describe("list tool", () => {
-  it("returns error when list directory resolves outside base through a symlink", async () => {
-    if (!linkSupport.dirLinks) return
-    const result = await tools.list({ path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
       code: "path_outside_base",
       path: path.join(tmp, "linked-outside-dir"),

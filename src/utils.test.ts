@@ -21,10 +21,12 @@ import {
 import { createLink, detectLinkSupport, type LinkSupport } from "./testSupport"
 
 let tmp: string
+let outsideTmp: string
 let linkSupport: LinkSupport
 
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-test-"))
+  outsideTmp = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-test-outside-"))
   linkSupport = await detectLinkSupport(path.join(tmp, "utils-link-check"))
 
   await fs.writeFile(path.join(tmp, "hello.txt"), "hello world\n")
@@ -55,6 +57,9 @@ beforeAll(async () => {
   if (linkSupport.fileSymlinks) {
     await createLink(path.join(tmp, "hello.txt"), path.join(tmp, "hello-link.txt"))
   }
+  if (linkSupport.dirLinks) {
+    await createLink(outsideTmp, path.join(tmp, "linked-outside-dir"), "dir")
+  }
 })
 
 beforeEach(() => {
@@ -64,6 +69,7 @@ beforeEach(() => {
 afterAll(async () => {
   delete process.env[IGNORE_PATHS_ENV]
   await fs.rm(tmp, { recursive: true, force: true })
+  await fs.rm(outsideTmp, { recursive: true, force: true })
 })
 
 describe("expandHome", () => {

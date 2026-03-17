@@ -67,6 +67,28 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }
   }
 
+  const ensureDirectoryWithinBase = async (base: string, target: string): Promise<{ stat?: Stats; error?: string }> => {
+    const linkStat = await fs.lstat(target).catch(() => undefined)
+    if (!linkStat) return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
+
+    const realBase = await fs.realpath(base).catch(() => base)
+    const realTarget = await fs.realpath(target).catch(() => target)
+    const rel = path.relative(realBase, realTarget)
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
+    }
+
+    const stat = await fs.stat(realTarget).catch(() => undefined)
+    if (!stat) return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
+    if (!stat.isDirectory()) {
+      return {
+        error: formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", target]]),
+      }
+    }
+
+    return { stat }
+  }
+
   tools.push(
     tool({
       name: "read",
@@ -146,9 +168,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const base = baseDir()
         const dir = resolveInputPath(base, input)
         if (isErrorOutput(dir)) return dir
-        const stat = await fs.stat(dir).catch(() => undefined)
-        if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
-        if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
+        const checked = await ensureDirectoryWithinBase(base, dir)
+        if (checked.error) return checked.error
         const deep = recursive ?? false
         const kind = type ?? "all"
         const start = (offset ?? 1) - 1
@@ -207,9 +228,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const base = baseDir()
         const dir = resolveInputPath(base, input)
         if (isErrorOutput(dir)) return dir
-        const stat = await fs.stat(dir).catch(() => undefined)
-        if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
-        if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
+        const checked = await ensureDirectoryWithinBase(base, dir)
+        if (checked.error) return checked.error
         const kind = type ?? "files"
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
@@ -251,9 +271,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const base = baseDir()
         const dir = resolveInputPath(base, input)
         if (isErrorOutput(dir)) return dir
-        const stat = await fs.stat(dir).catch(() => undefined)
-        if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
-        if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
+        const checked = await ensureDirectoryWithinBase(base, dir)
+        if (checked.error) return checked.error
         const matches = await grepWithRipgrep({ baseDir: base, dir, pattern, include, exclude })
         if (isErrorResult(matches)) return matches
         const fileCount = new Set(matches.map((match) => match.path)).size
