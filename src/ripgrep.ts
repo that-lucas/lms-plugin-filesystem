@@ -136,8 +136,8 @@ const collectFileEntries = async (baseDir: string, dir: string, pattern: string,
     "--no-messages",
     "--sortr",
     "modified",
-    ...ripgrepGlobArgs(dir, defaults),
     ...userGlobs,
+    ...ripgrepGlobArgs(dir, defaults),
     ".",
   ])
   if (isErrorResult(result)) return result

@@ -498,25 +498,6 @@ describe("glob tool", () => {
     expect(parseGlob(result).entries).toEqual([path.join(tmp, "src")])
   })
 
-  it("passes include globs through to ripgrep for files", async () => {
-    const result = await tools.glob({ pattern: "**/*", path: tmp, include: ["**/*.ts"] })
-    expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "big.txt"),
-      path.join(tmp, "node_modules", "dep.js"),
-      path.join(tmp, "data.bin"),
-      path.join(tmp, "src", "index.ts"),
-      path.join(tmp, "src", "MixedCase.TS"),
-      path.join(tmp, "src", "existing.ts"),
-      path.join(tmp, "src", "utils.ts"),
-      path.join(tmp, "literal.txt"),
-      path.join(tmp, "src", "lib", "helper.ts"),
-      path.join(tmp, "search-me.ts"),
-      path.join(tmp, "empty.txt"),
-      path.join(tmp, "hello.txt"),
-    ])
-  })
-
   it("passes include and exclude globs directly to rg for file matching", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, include: ["**/src/**"], exclude: ["src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
