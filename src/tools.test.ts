@@ -472,6 +472,9 @@ describe("glob tool", () => {
     ])
   })
 
+  // ripgrep's --glob treats "*.ts" as matching at any depth, unlike Minimatch
+  // where "*.ts" only matches entries directly under the search root. The glob
+  // tool intentionally adopts ripgrep's semantics here.
   it("uses ripgrep file glob semantics without root-only matching", async () => {
     const result = await tools.glob({ pattern: "*.ts", path: tmp })
     expect(parseGlob(result).entries).toEqual([

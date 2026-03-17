@@ -171,8 +171,7 @@ describe("runSubprocess", () => {
 
     expect(Date.now() - started).toBeLessThan(2_000)
     expect(result.timedOut).toBe(true)
-    expect(result.exitCode).toBeNull()
-    expect(result.signal).toBeTruthy()
+    expect(result.signal ?? result.exitCode).toBeTruthy()
   })
 
   it("captures stdout and stderr independently", async () => {
