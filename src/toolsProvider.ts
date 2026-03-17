@@ -41,10 +41,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }
   }
 
-  const ensureExistingPathIsSafe = async (target: string, expected: "file" | "directory"): Promise<{ stat?: Stats; error?: string }> => {
+  const ensureExistingPathIsSafe = async (base: string, target: string, expected: "file" | "directory"): Promise<{ stat?: Stats; error?: string }> => {
     const stat = await fs.lstat(target).catch(() => undefined)
     if (stat?.isSymbolicLink()) {
       return { error: formatError("wrong_type", "Path is a symbolic link", [["expected", expected], ["actual", "symlink"], ["path", target]]) }
+    }
+    if (stat) {
+      const realBase = await fs.realpath(base).catch(() => base)
+      const realTarget = await fs.realpath(target).catch(() => target)
+      if (!withinBase(realBase, realTarget)) {
+        return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
+      }
     }
     return { stat }
   }
@@ -101,7 +108,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const base = baseDir()
         const file = resolveInputPath(base, filePath)
         if (isErrorOutput(file)) return file
-        const { stat, error } = await ensureExistingPathIsSafe(file, "file")
+        const { stat, error } = await ensureExistingPathIsSafe(base, file, "file")
         if (error) return error
         if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
         if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
@@ -310,7 +317,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (isErrorOutput(target)) return target
 
         if (type === "file") {
-          const { stat, error } = await ensureExistingPathIsSafe(target, "file")
+          const { stat, error } = await ensureExistingPathIsSafe(base, target, "file")
           if (error) return error
           if (stat?.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", target]])
           if (stat && !overwrite) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
@@ -351,7 +358,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (encoding !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "encoding"]])
         }
-        const { stat, error } = await ensureExistingPathIsSafe(target, "directory")
+        const { stat, error } = await ensureExistingPathIsSafe(base, target, "directory")
         if (error) return error
         if (stat?.isFile()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", target]])
         if (stat) return formatError("already_exists", "Directory already exists", [["kind", "directory"], ["path", target]])
@@ -397,7 +404,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const file = resolveInputPath(base, input)
         if (isErrorOutput(file)) return file
 
-        const { stat, error } = await ensureExistingPathIsSafe(file, "file")
+        const { stat, error } = await ensureExistingPathIsSafe(base, file, "file")
         if (error) return error
         if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
         if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])

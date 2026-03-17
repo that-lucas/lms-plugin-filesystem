@@ -295,6 +295,15 @@ describe("read tool", () => {
     })
   })
 
+  it("returns error when file parent resolves outside base through a directory symlink", async () => {
+    if (!linkSupport.dirLinks) return
+    const result = await tools.read({ filePath: path.join(tmp, "linked-outside-dir", "outside-read.txt") })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
+      path: path.join(tmp, "linked-outside-dir", "outside-read.txt"),
+    })
+  })
+
   it("returns error for out-of-range offset", async () => {
     const result = await tools.read({ filePath: path.join(tmp, "hello.txt"), offset: 999 })
     expect(parseError(result)).toMatchObject({
@@ -993,6 +1002,16 @@ describe("edit tool", () => {
     expect(parseError(result)).toMatchObject({
       code: "wrong_type",
       actual: "symlink",
+      path: target,
+    })
+  })
+
+  it("returns error when file parent resolves outside base through a directory symlink", async () => {
+    if (!linkSupport.dirLinks) return
+    const target = path.join(tmp, "linked-outside-dir", "outside-edit.txt")
+    const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
       path: target,
     })
   })
