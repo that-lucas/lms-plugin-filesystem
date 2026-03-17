@@ -27,7 +27,7 @@ export const detectLinkSupport = async (tmpDir: string) => {
   try {
     await createLink(dirTarget, dirLink, "dir")
     dirLinks = true
-  } finally {
+  } catch {} finally {
     await fs.rm(fileLink, { force: true, recursive: true }).catch(() => undefined)
     await fs.rm(fileTarget, { force: true }).catch(() => undefined)
     await fs.rm(dirLink, { force: true, recursive: true }).catch(() => undefined)

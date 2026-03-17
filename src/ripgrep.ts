@@ -268,12 +268,13 @@ export async function globWithRipgrep({
   if (kind !== "files") {
     const matcher = new Minimatch(pattern, { dot: true, nocase: true })
     const dirs = await walk(dir, { recursive: true, type: "directories", include, exclude, baseDir })
-    const dirEntries = await Promise.all(
-      dirs.map(async (item) => ({
-        path: item.path,
-        time: (await fs.stat(item.path)).mtime.getTime(),
-      })),
-    )
+    const dirEntries = (await Promise.all(
+      dirs.map(async (item) => {
+        const stat = await fs.stat(item.path).catch(() => undefined)
+        if (!stat) return undefined
+        return { path: item.path, time: stat.mtime.getTime() }
+      }),
+    )).filter((entry): entry is GlobEntry => entry !== undefined)
 
     for (const entry of dirEntries) {
       const rel = relPath(dir, entry.path)

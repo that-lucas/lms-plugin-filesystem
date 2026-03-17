@@ -462,7 +462,12 @@ describe("glob tool", () => {
       total: 4,
       hasMore: false,
       nextOffset: undefined,
-      entries: [path.join(tmp, "big.txt"), path.join(tmp, "literal.txt"), path.join(tmp, "empty.txt"), path.join(tmp, "hello.txt")],
+      entries: [
+        path.join(tmp, "big.txt"), // matched by pattern *.txt
+        path.join(tmp, "literal.txt"), // matched by pattern *.txt
+        path.join(tmp, "empty.txt"), // matched by pattern *.txt
+        path.join(tmp, "hello.txt"), // matched by pattern *.txt
+      ],
       entriesBytes: Buffer.byteLength([
         path.join(tmp, "big.txt"),
         path.join(tmp, "literal.txt"),
@@ -475,12 +480,12 @@ describe("glob tool", () => {
   it("matches nested files with **", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp })
     expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "src", "index.ts"),
-      path.join(tmp, "src", "existing.ts"),
-      path.join(tmp, "src", "utils.ts"),
-      path.join(tmp, "src", "lib", "helper.ts"),
-      path.join(tmp, "search-me.ts"),
+      path.join(tmp, "multi-match.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "index.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "existing.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "utils.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "lib", "helper.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "search-me.ts"), // matched by pattern **/*.ts
     ])
   })
 
@@ -490,12 +495,12 @@ describe("glob tool", () => {
   it("uses ripgrep file glob semantics without root-only matching", async () => {
     const result = await tools.glob({ pattern: "*.ts", path: tmp })
     expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "src", "index.ts"),
-      path.join(tmp, "src", "existing.ts"),
-      path.join(tmp, "src", "utils.ts"),
-      path.join(tmp, "src", "lib", "helper.ts"),
-      path.join(tmp, "search-me.ts"),
+      path.join(tmp, "multi-match.ts"), // matched by pattern *.ts (rg matches at any depth)
+      path.join(tmp, "src", "index.ts"), // matched by pattern *.ts (rg matches at any depth)
+      path.join(tmp, "src", "existing.ts"), // matched by pattern *.ts (rg matches at any depth)
+      path.join(tmp, "src", "utils.ts"), // matched by pattern *.ts (rg matches at any depth)
+      path.join(tmp, "src", "lib", "helper.ts"), // matched by pattern *.ts (rg matches at any depth)
+      path.join(tmp, "search-me.ts"), // matched by pattern *.ts (rg matches at any depth)
     ])
   })
 
@@ -506,35 +511,35 @@ describe("glob tool", () => {
 
   it("respects type filter for directories", async () => {
     const result = await tools.glob({ pattern: "*", path: tmp, type: "directories" })
-    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src")])
+    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src")]) // matched by pattern *
   })
 
   it("passes include and exclude globs directly to rg for file matching", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, include: ["**/src/**"], exclude: ["src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "src", "index.ts"),
-      path.join(tmp, "src", "MixedCase.TS"),
-      path.join(tmp, "src", "existing.ts"),
-      path.join(tmp, "src", "utils.ts"),
-      path.join(tmp, "search-me.ts"),
+      path.join(tmp, "multi-match.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "index.ts"), // matched by pattern **/*.ts + include **/src/**
+      path.join(tmp, "src", "MixedCase.TS"), // matched by include **/src/** (not by pattern — rg glob is case-sensitive)
+      path.join(tmp, "src", "existing.ts"), // matched by pattern **/*.ts + include **/src/**
+      path.join(tmp, "src", "utils.ts"), // matched by pattern **/*.ts + include **/src/**
+      path.join(tmp, "search-me.ts"), // matched by pattern **/*.ts
     ])
   })
 
   it("respects exclude filter for directories and does not traverse them", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, exclude: ["src/lib", "src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"),
-      path.join(tmp, "src", "index.ts"),
-      path.join(tmp, "src", "existing.ts"),
-      path.join(tmp, "src", "utils.ts"),
-      path.join(tmp, "search-me.ts"),
+      path.join(tmp, "multi-match.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "index.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "existing.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "src", "utils.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "search-me.ts"), // matched by pattern **/*.ts (src/lib/helper.ts excluded)
     ])
   })
 
   it("returns included directories while still traversing unmatched parents", async () => {
     const result = await tools.glob({ pattern: "**", path: tmp, type: "directories", include: ["src/lib"] })
-    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src", "lib")])
+    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src", "lib")]) // matched by include src/lib
   })
 
   it("supports pagination", async () => {
