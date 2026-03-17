@@ -216,6 +216,15 @@ describe("walk", () => {
     expect(names).not.toContain("src/lib/helper.ts")
   })
 
+  it("supports bracket character classes in env ignore patterns", async () => {
+    await fs.writeFile(path.join(tmp, "data1.txt"), "one\n")
+    await fs.writeFile(path.join(tmp, "data9.txt"), "nine\n")
+    process.env[IGNORE_PATHS_ENV] = "data[0-9].txt"
+    const names = (await walk(tmp)).map((i) => relPath(tmp, i.path))
+    expect(names).not.toContain("data1.txt")
+    expect(names).not.toContain("data9.txt")
+  })
+
   it("non-recursive lists only top level", async () => {
     const names = (await walk(tmp, { recursive: false })).map((i) => relPath(tmp, i.path))
     expect(names).toContain("hello.txt")

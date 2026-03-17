@@ -58,7 +58,7 @@ const ripgrepError = (details: string) => formatError("filesystem_error", "Files
 
 const normalizeRipgrepPath = (dir: string, filePath: string) => path.isAbsolute(filePath) ? filePath : path.resolve(dir, filePath)
 
-const GLOB_META = /[*?{[!(]/
+const GLOB_META = /[*?{\[!(]/
 
 const isGlobPattern = (pattern: string) => GLOB_META.test(pattern)
 
