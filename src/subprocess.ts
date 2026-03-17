@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import { constants as fsConstants } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
-import { resolvePath } from "./utils"
+import { resolvePath, withinBase } from "./utils"
 
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 10_000
 export const DEFAULT_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
@@ -62,11 +62,6 @@ export async function resolveExecutable(command: string, envPath = process.env.P
   }
 
   return undefined
-}
-
-const withinBase = (base: string, target: string) => {
-  const rel = path.relative(base, target)
-  return rel === "" || (!(rel === ".." || rel.startsWith(`..${path.sep}`)) && !path.isAbsolute(rel))
 }
 
 const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {

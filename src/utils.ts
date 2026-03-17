@@ -103,8 +103,7 @@ export const expandHome = (input: string) => {
 
 export const resolvePath = (base: string, input?: string) => {
   const full = path.resolve(base, expandHome(input || "."))
-  const rel = path.relative(base, full)
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (!withinBase(base, full)) {
     throw new PathOutsideBaseError(full)
   }
   return full
@@ -139,7 +138,7 @@ export const blocked = (file: string, base: string) => {
   return isSystemPath(file)
 }
 
-const withinBase = (base: string, target: string) => {
+export const withinBase = (base: string, target: string) => {
   const rel = path.relative(base, target)
   return rel === "" || (!(rel === ".." || rel.startsWith(`..${path.sep}`)) && !path.isAbsolute(rel))
 }

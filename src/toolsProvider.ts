@@ -16,6 +16,7 @@ import {
   walk,
   binary,
   formatTree,
+  withinBase,
 } from "./utils"
 
 export async function toolsProvider(ctl: ToolsProviderController) {
@@ -55,8 +56,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       const stat = await fs.lstat(current).catch(() => undefined)
       if (stat) {
         const realCurrent = await fs.realpath(current).catch(() => current)
-        const rel = path.relative(realBase, realCurrent)
-        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        if (!withinBase(realBase, realCurrent)) {
           return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
         }
         return undefined
@@ -73,8 +73,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
 
     const realBase = await fs.realpath(base).catch(() => base)
     const realTarget = await fs.realpath(target).catch(() => target)
-    const rel = path.relative(realBase, realTarget)
-    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    if (!withinBase(realBase, realTarget)) {
       return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
     }
 
