@@ -157,10 +157,12 @@ beforeAll(async () => {
   await fs.writeFile(path.join(tmp, "src", "lib", "helper.ts"), "export function help() {}\n")
   await fs.writeFile(path.join(tmp, "src", "existing.ts"), "existing\n")
   await fs.mkdir(path.join(tmp, "src", "existing-dir"), { recursive: true })
-  if (linkSupport.symlinks) {
+  if (linkSupport.fileSymlinks) {
     await createLink(path.join(outsideTmp, "outside-read.txt"), path.join(tmp, "read-link.txt"))
     await createLink(path.join(outsideTmp, "outside-edit.txt"), path.join(tmp, "edit-link.txt"))
     await createLink(path.join(outsideTmp, "outside-write.txt"), path.join(tmp, "write-link.txt"))
+  }
+  if (linkSupport.dirLinks) {
     await createLink(outsideTmp, path.join(tmp, "linked-outside-dir"), "dir")
   }
 
@@ -284,7 +286,7 @@ describe("read tool", () => {
   })
 
   it("returns error for symbolic links", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.fileSymlinks) return
     const result = await tools.read({ filePath: path.join(tmp, "read-link.txt") })
     expect(parseError(result)).toMatchObject({
       code: "wrong_type",
@@ -546,7 +548,7 @@ describe("glob tool", () => {
   })
 
   it("returns error when directory path resolves outside base through a symlink", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.dirLinks) return
     const result = await tools.glob({ pattern: "*", path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
       code: "path_outside_base",
@@ -660,7 +662,7 @@ describe("grep tool", () => {
   })
 
   it("returns error when grep directory resolves outside base through a symlink", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.dirLinks) return
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
       code: "path_outside_base",
@@ -749,7 +751,7 @@ describe("create tool", () => {
   })
 
   it("returns error when file target is a symbolic link", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "write-link.txt")
     const result = await tools.create({ type: "file", path: target, content: "new", overwrite: true })
     expect(parseError(result)).toMatchObject({
@@ -760,7 +762,7 @@ describe("create tool", () => {
   })
 
   it("returns error when file parent resolves outside base through a symlink", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.dirLinks) return
     const target = path.join(tmp, "linked-outside-dir", "new.txt")
     const result = await tools.create({ type: "file", path: target, content: "new" })
     expect(parseError(result)).toMatchObject({
@@ -971,7 +973,7 @@ describe("edit tool", () => {
   })
 
   it("returns error for symbolic links", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "edit-link.txt")
     const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({

@@ -7,6 +7,7 @@ import { blocked, defaultIgnoreList, relPath, SYSTEM_IGNORES, walk } from "./uti
 
 export const RIPGREP_TIMEOUT_MS = 60_000
 export const RIPGREP_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+const RIPGREP_STAT_BATCH_SIZE = 32
 
 type TextValue = {
   text?: string
@@ -153,14 +154,23 @@ const collectFileEntries = async (baseDir: string, dir: string, pattern: string,
   if (isErrorResult(result)) return result
   if (result.exitCode !== 0) return ripgrepError(result.stderr || `ripgrep exited with code ${result.exitCode}`)
 
+  const paths = result.stdout
+    .split(/\r?\n/)
+    .map((rawLine) => rawLine.trim())
+    .filter((filePath) => filePath.length > 0)
+
   const out: GlobEntry[] = []
-  for (const rawLine of result.stdout.split(/\r?\n/)) {
-    const filePath = rawLine.trim()
-    if (filePath.length === 0) continue
-    const fullPath = normalizeRipgrepPath(dir, filePath)
-    const stat = await fs.lstat(fullPath).catch(() => undefined)
-    if (!stat || stat.isSymbolicLink() || !stat.isFile()) continue
-    out.push({ path: fullPath, time: stat.mtime.getTime() })
+  for (let index = 0; index < paths.length; index += RIPGREP_STAT_BATCH_SIZE) {
+    const batch = paths.slice(index, index + RIPGREP_STAT_BATCH_SIZE)
+    const entries = await Promise.all(
+      batch.map(async (filePath) => {
+        const fullPath = normalizeRipgrepPath(dir, filePath)
+        const stat = await fs.lstat(fullPath).catch(() => undefined)
+        if (!stat || stat.isSymbolicLink() || !stat.isFile()) return undefined
+        return { path: fullPath, time: stat.mtime.getTime() }
+      }),
+    )
+    out.push(...entries.filter((entry): entry is GlobEntry => entry !== undefined))
   }
   return out
 }

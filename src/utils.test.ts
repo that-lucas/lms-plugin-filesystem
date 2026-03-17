@@ -52,7 +52,7 @@ beforeAll(async () => {
   await fs.mkdir(path.join(tmp, "a", "b", "c"), { recursive: true })
   await fs.writeFile(path.join(tmp, "a", "b", "c", "deep.txt"), "deep\n")
 
-  if (linkSupport.symlinks) {
+  if (linkSupport.fileSymlinks) {
     await createLink(path.join(tmp, "hello.txt"), path.join(tmp, "hello-link.txt"))
   }
 })
@@ -264,7 +264,7 @@ describe("walk", () => {
   })
 
   it("skips symbolic links", async () => {
-    if (!linkSupport.symlinks) return
+    if (!linkSupport.fileSymlinks) return
     const names = (await walk(tmp, { type: "files" })).map((i) => relPath(tmp, i.path))
     expect(names).toContain("hello.txt")
     expect(names).not.toContain("hello-link.txt")
