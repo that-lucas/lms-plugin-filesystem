@@ -267,7 +267,7 @@ export async function globWithRipgrep({
 
   if (kind !== "files") {
     const matcher = new Minimatch(pattern, { dot: true, nocase: true })
-    const dirs = await walk(dir, { recursive: true, type: "directories", include, exclude })
+    const dirs = await walk(dir, { recursive: true, type: "directories", include, exclude, baseDir })
     const dirEntries = await Promise.all(
       dirs.map(async (item) => ({
         path: item.path,

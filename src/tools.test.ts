@@ -671,6 +671,17 @@ describe("grep tool", () => {
   })
 })
 
+describe("list tool", () => {
+  it("returns error when list directory resolves outside base through a symlink", async () => {
+    if (!linkSupport.dirLinks) return
+    const result = await tools.list({ path: path.join(tmp, "linked-outside-dir") })
+    expect(parseError(result)).toMatchObject({
+      code: "path_outside_base",
+      path: path.join(tmp, "linked-outside-dir"),
+    })
+  })
+})
+
 describe("create tool", () => {
   it("creates a new file with content", async () => {
     const target = path.join(tmp, "created.txt")

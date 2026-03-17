@@ -278,6 +278,11 @@ describe("walk", () => {
     expect(names).toContain("hello.txt")
     expect(names).not.toContain("hello-link.txt")
   })
+
+  it("throws when the starting directory resolves outside the sandbox base", async () => {
+    if (!linkSupport.dirLinks) return
+    await expect(walk(path.join(tmp, "linked-outside-dir"), { baseDir: tmp })).rejects.toThrow(PathOutsideBaseError)
+  })
 })
 
 describe("binary", () => {

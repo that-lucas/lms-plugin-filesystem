@@ -153,7 +153,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const kind = type ?? "all"
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
-        const found = await walk(dir, { ignore, recursive: deep, type: kind })
+        let found
+        try {
+          found = await walk(dir, { ignore, recursive: deep, type: kind, baseDir: base })
+        } catch (error) {
+          if (error instanceof PathOutsideBaseError) {
+            return formatError("path_outside_base", "Path is outside the configured base directory", [["path", error.filePath]])
+          }
+          const message = error instanceof Error ? error.message : String(error)
+          return formatError("filesystem_error", "Filesystem operation failed", [["details", message]])
+        }
         const slice = found.slice(start, start + size)
         const out = !deep
           ? [

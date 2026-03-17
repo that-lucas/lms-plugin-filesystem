@@ -80,6 +80,7 @@ export type WalkOptions = {
   exclude?: string[]
   recursive?: boolean
   type?: "all" | "files" | "directories"
+  baseDir?: string
 }
 
 export const IGNORE_PATHS_ENV = "LMS_FILESYSTEM_IGNORE_PATHS"
@@ -138,6 +139,11 @@ export const blocked = (file: string, base: string) => {
   return isSystemPath(file)
 }
 
+const withinBase = (base: string, target: string) => {
+  const rel = path.relative(base, target)
+  return rel === "" || (!(rel === ".." || rel.startsWith(`..${path.sep}`)) && !path.isAbsolute(rel))
+}
+
 export const walk = async (base: string, opts?: WalkOptions) => {
   const out: Item[] = []
   const skip = compile(opts?.ignore)
@@ -147,8 +153,17 @@ export const walk = async (base: string, opts?: WalkOptions) => {
   const defaultMatchers = compile(defaults)
   const recursive = opts?.recursive ?? true
   const type = opts?.type ?? "all"
+  const sandboxBase = opts?.baseDir
+  const realSandboxBase = sandboxBase ? await fs.realpath(sandboxBase).catch(() => sandboxBase) : undefined
+
+  const assertWithinSandbox = async (target: string) => {
+    if (!realSandboxBase) return
+    const realTarget = await fs.realpath(target).catch(() => target)
+    if (!withinBase(realSandboxBase, realTarget)) throw new PathOutsideBaseError(target)
+  }
 
   const visit = async (dir: string) => {
+    await assertWithinSandbox(dir)
     if (blocked(dir, base)) return
     const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
     items.sort((a, b) => a.name.localeCompare(b.name))
@@ -170,6 +185,7 @@ export const walk = async (base: string, opts?: WalkOptions) => {
     }
   }
 
+  await assertWithinSandbox(base)
   await visit(base)
   return out
 }
