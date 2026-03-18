@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import { constants as fsConstants } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
-import { resolvePath, withinBase } from "./utils"
+import { assertNoSymlinkPath, PathNotFoundError, resolvePath, strictRealpath, withinBase } from "./utils"
 
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 10_000
 export const DEFAULT_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
@@ -66,12 +66,15 @@ export async function resolveExecutable(command: string, envPath = process.env.P
 
 const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {
   const resolved = resolvePath(baseDir, cwd)
+  await assertNoSymlinkPath(baseDir, resolved)
+  const linkStat = await fs.lstat(resolved).catch(() => undefined)
+  if (!linkStat || linkStat.isSymbolicLink()) throw new PathNotFoundError(resolved)
   const stat = await fs.stat(resolved).catch(() => undefined)
   if (!stat) throw new Error(`Working directory not found: ${resolved}`)
   if (!stat.isDirectory()) throw new Error(`Working directory is not a directory: ${resolved}`)
 
-  const realBase = await fs.realpath(baseDir).catch(() => baseDir)
-  const realCwd = await fs.realpath(resolved).catch(() => resolved)
+  const realBase = await strictRealpath(baseDir)
+  const realCwd = await strictRealpath(resolved)
   if (!withinBase(realBase, realCwd)) {
     throw new Error(`Working directory is outside the configured base directory: ${resolved}`)
   }

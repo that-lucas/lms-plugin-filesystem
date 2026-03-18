@@ -161,6 +161,7 @@ beforeAll(async () => {
     await createLink(path.join(outsideTmp, "outside-read.txt"), path.join(tmp, "read-link.txt"))
     await createLink(path.join(outsideTmp, "outside-edit.txt"), path.join(tmp, "edit-link.txt"))
     await createLink(path.join(outsideTmp, "outside-write.txt"), path.join(tmp, "write-link.txt"))
+    await createLink(path.join(tmp, "search-me.ts"), path.join(tmp, "search-link.ts"))
   }
   if (linkSupport.dirLinks) {
     await createLink(outsideTmp, path.join(tmp, "linked-outside-dir"), "dir")
@@ -285,21 +286,20 @@ describe("read tool", () => {
     })
   })
 
-  it("returns error for symbolic links", async () => {
+  it("treats root file symlinks as not found", async () => {
     if (!linkSupport.fileSymlinks) return
     const result = await tools.read({ filePath: path.join(tmp, "read-link.txt") })
     expect(parseError(result)).toMatchObject({
-      code: "wrong_type",
-      actual: "symlink",
+      code: "not_found",
       path: path.join(tmp, "read-link.txt"),
     })
   })
 
-  it("returns error when file parent resolves outside base through a directory symlink", async () => {
+  it("treats file paths through root directory symlinks as not found", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.read({ filePath: path.join(tmp, "linked-outside-dir", "outside-read.txt") })
     expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
+      code: "not_found",
       path: path.join(tmp, "linked-outside-dir", "outside-read.txt"),
     })
   })
@@ -410,6 +410,16 @@ describe("list tool", () => {
     expect(parsed.entries).not.toContain("  hello.txt")
   })
 
+  it("is the directory discovery tool for nested directories", async () => {
+    const result = await tools.list({ path: tmp, recursive: true, type: "directories" })
+    expect(parseList(result).entries).toEqual([
+      `${tmp}/`,
+      "  src/",
+      "    existing-dir/",
+      "    lib/",
+    ])
+  })
+
   it("skips default-ignored directories", async () => {
     const result = await tools.list({ path: tmp, recursive: true })
     expect(result).not.toContain("node_modules")
@@ -449,11 +459,19 @@ describe("list tool", () => {
     })
   })
 
-  it("returns error when list directory resolves outside base through a symlink", async () => {
+  it("returns top-level directory results in path-ascending order", async () => {
+    const result = await tools.list({ path: tmp, type: "directories" })
+    expect(parseList(result).entries).toEqual([
+      `${tmp}/`,
+      "  src/",
+    ])
+  })
+
+  it("treats root directory symlinks as not found", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.list({ path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
+      code: "not_found",
       path: path.join(tmp, "linked-outside-dir"),
     })
   })
@@ -518,11 +536,6 @@ describe("glob tool", () => {
     expect(parseGlob(result).entries).toEqual([])
   })
 
-  it("respects type filter for directories", async () => {
-    const result = await tools.glob({ pattern: "*", path: tmp, type: "directories" })
-    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src")]) // matched by pattern *
-  })
-
   it("passes include and exclude globs directly to rg for file matching", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, include: ["**/src/**"], exclude: ["src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
@@ -535,7 +548,7 @@ describe("glob tool", () => {
     ])
   })
 
-  it("respects exclude filter for directories and does not traverse them", async () => {
+  it("respects exclude filter for file matching", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, exclude: ["src/lib", "src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
       path.join(tmp, "multi-match.ts"), // matched by pattern **/*.ts
@@ -544,11 +557,6 @@ describe("glob tool", () => {
       path.join(tmp, "src", "utils.ts"), // matched by pattern **/*.ts
       path.join(tmp, "search-me.ts"), // matched by pattern **/*.ts (src/lib/helper.ts excluded)
     ])
-  })
-
-  it("returns included directories while still traversing unmatched parents", async () => {
-    const result = await tools.glob({ pattern: "**", path: tmp, type: "directories", include: ["src/lib"] })
-    expect(parseGlob(result).entries).toEqual([path.join(tmp, "src", "lib")]) // matched by include src/lib
   })
 
   it("supports pagination", async () => {
@@ -570,11 +578,11 @@ describe("glob tool", () => {
     expect(parseError(result).code).toBe("not_found")
   })
 
-  it("returns error when directory path resolves outside base through a symlink", async () => {
+  it("treats root directory symlinks as not found", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.glob({ pattern: "*", path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
+      code: "not_found",
       path: path.join(tmp, "linked-outside-dir"),
     })
   })
@@ -630,6 +638,16 @@ describe("grep tool", () => {
     ])
   })
 
+  it("treats include globs as a union with the searched file set", async () => {
+    const result = await tools.grep({ pattern: "export", path: tmp, include: ["**/src/**"] })
+    expect(parseGrep(result).matches).toEqual([
+      { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
+      { path: path.join(tmp, "src", "MixedCase.TS"), line: 1, text: "export const MIXED = true" },
+      { path: path.join(tmp, "src", "utils.ts"), line: 1, text: "export const add = (a: number, b: number) => a + b" },
+      { path: path.join(tmp, "src", "lib", "helper.ts"), line: 1, text: "export function help() {}" },
+    ])
+  })
+
   it("respects exclude filter", async () => {
     const result = await tools.grep({ pattern: "export", path: tmp, exclude: ["src/lib", "src/lib/**"] })
     expect(parseGrep(result).matches).toEqual([
@@ -650,6 +668,12 @@ describe("grep tool", () => {
   it("skips binary files", async () => {
     const result = await tools.grep({ pattern: ".*", path: tmp })
     expect(result).not.toContain("data.bin")
+  })
+
+  it("ignores nested symlinked files", async () => {
+    if (!linkSupport.fileSymlinks) return
+    const result = await tools.grep({ pattern: "foo", path: tmp, include: ["**/*link.ts"] })
+    expect(parseGrep(result).matches).toEqual([])
   })
 
   it("returns empty match metadata when nothing matches", async () => {
@@ -684,11 +708,11 @@ describe("grep tool", () => {
     expect(parseError(result).code).toBe("not_found")
   })
 
-  it("returns error when grep directory resolves outside base through a symlink", async () => {
+  it("treats root directory symlinks as not found", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
+      code: "not_found",
       path: path.join(tmp, "linked-outside-dir"),
     })
   })
@@ -773,13 +797,12 @@ describe("create tool", () => {
     })
   })
 
-  it("returns error when file target is a symbolic link", async () => {
+  it("treats root file symlink targets as not found", async () => {
     if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "write-link.txt")
     const result = await tools.create({ type: "file", path: target, content: "new", overwrite: true })
     expect(parseError(result)).toMatchObject({
-      code: "wrong_type",
-      actual: "symlink",
+      code: "not_found",
       path: target,
     })
   })
@@ -789,7 +812,7 @@ describe("create tool", () => {
     const target = path.join(tmp, "linked-outside-dir", "new.txt")
     const result = await tools.create({ type: "file", path: target, content: "new" })
     expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
+      code: "not_found",
       path: target,
     })
   })
@@ -995,23 +1018,22 @@ describe("edit tool", () => {
     expect(parseError(result).code).toBe("binary_file")
   })
 
-  it("returns error for symbolic links", async () => {
+  it("treats root file symlinks as not found", async () => {
     if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "edit-link.txt")
     const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({
-      code: "wrong_type",
-      actual: "symlink",
+      code: "not_found",
       path: target,
     })
   })
 
-  it("returns error when file parent resolves outside base through a directory symlink", async () => {
+  it("treats file paths through root directory symlinks as not found", async () => {
     if (!linkSupport.dirLinks) return
     const target = path.join(tmp, "linked-outside-dir", "outside-edit.txt")
     const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({
-      code: "path_outside_base",
+      code: "not_found",
       path: target,
     })
   })

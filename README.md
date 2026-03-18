@@ -2,15 +2,15 @@
 
 Filesystem tools for LM Studio.
 
-This plugin adds a small set of practical filesystem tools for reading files, browsing directories, searching paths, searching file contents, and making simple file edits.
+This plugin adds a small set of practical filesystem tools for reading files, browsing directories, finding file paths by glob, searching file contents, and making simple file edits.
 
 For safer everyday use, consider using LM Studio's Permission system to leave the read tools (`read`, `list`, `glob`, `grep`) on Allow and the write tools (`create`, `edit`) on Ask. This is especially helpful with smaller or less capable local models. When the plugin is first installed, all tools default to Ask.
 
 ## Included Tools
 
 - `read` — read text from a file
-- `list` — browse files and directories
-- `glob` — find paths by glob pattern
+- `list` — browse files and directories under a directory
+- `glob` — find matching file paths by glob pattern
 - `grep` — search text inside files with a regular expression
 - `create` — create files and directories
 - `edit` — edit existing text files with exact replacements
@@ -33,7 +33,7 @@ The plugin can be scoped to a base directory through its LM Studio configuration
 
 ### Ignored Paths
 
-Traversal tools (`list`, `glob`, and `grep`) respect the `LMS_FILESYSTEM_IGNORE_PATHS` environment variable.
+Traversal and search tools (`list`, `glob`, and `grep`) respect the `LMS_FILESYSTEM_IGNORE_PATHS` environment variable.
 
 If `LMS_FILESYSTEM_IGNORE_PATHS` is unset, the built-in ignored paths are:
 

@@ -10,9 +10,12 @@ import { globWithRipgrep, grepWithRipgrep, isErrorResult } from "./ripgrep"
 import {
   READ_LIMIT,
   FILE_LIMIT,
+  assertNoSymlinkPath,
+  PathNotFoundError,
   PathOutsideBaseError,
   expandHome,
   resolvePath,
+  strictRealpath,
   walk,
   binary,
   formatTree,
@@ -42,27 +45,56 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   }
 
   const ensureExistingPathIsSafe = async (base: string, target: string, expected: "file" | "directory"): Promise<{ stat?: Stats; error?: string }> => {
+    try {
+      await assertNoSymlinkPath(base, target)
+    } catch (error) {
+      if (error instanceof PathNotFoundError) {
+        return { error: formatError("not_found", expected === "file" ? "File not found" : "Directory not found", [["kind", expected], ["path", target]]) }
+      }
+      throw error
+    }
     const stat = await fs.lstat(target).catch(() => undefined)
     if (stat?.isSymbolicLink()) {
-      return { error: formatError("wrong_type", "Path is a symbolic link", [["expected", expected], ["actual", "symlink"], ["path", target]]) }
+      return { error: formatError("not_found", expected === "file" ? "File not found" : "Directory not found", [["kind", expected], ["path", target]]) }
     }
     if (stat) {
-      const realBase = await fs.realpath(base).catch(() => base)
-      const realTarget = await fs.realpath(target).catch(() => target)
-      if (!withinBase(realBase, realTarget)) {
-        return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
+      try {
+        const realBase = await strictRealpath(base)
+        const realTarget = await strictRealpath(target)
+        if (!withinBase(realBase, realTarget)) {
+          return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
+        }
+      } catch (error) {
+        if (error instanceof PathNotFoundError) {
+          return { error: formatError("not_found", expected === "file" ? "File not found" : "Directory not found", [["kind", expected], ["path", target]]) }
+        }
+        throw error
       }
     }
     return { stat }
   }
 
+  const ensureCanonicalBase = async (base: string) => {
+    try {
+      return await strictRealpath(base)
+    } catch (error) {
+      if (error instanceof PathNotFoundError) {
+        throw new Error(`Base directory not found: ${base}`)
+      }
+      throw error
+    }
+  }
+
   const ensureParentWithinBase = async (base: string, target: string) => {
-    const realBase = await fs.realpath(base).catch(() => base)
+    const realBase = await ensureCanonicalBase(base)
     let current = path.dirname(target)
     while (true) {
       const stat = await fs.lstat(current).catch(() => undefined)
       if (stat) {
-        const realCurrent = await fs.realpath(current).catch(() => current)
+        if (stat.isSymbolicLink()) {
+          return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
+        }
+        const realCurrent = await strictRealpath(current)
         if (!withinBase(realBase, realCurrent)) {
           return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
         }
@@ -75,11 +107,31 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   }
 
   const ensureDirectoryWithinBase = async (base: string, target: string): Promise<{ stat?: Stats; error?: string }> => {
+    try {
+      await assertNoSymlinkPath(base, target)
+    } catch (error) {
+      if (error instanceof PathNotFoundError) {
+        return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
+      }
+      throw error
+    }
     const linkStat = await fs.lstat(target).catch(() => undefined)
     if (!linkStat) return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
+    if (linkStat.isSymbolicLink()) {
+      return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
+    }
 
-    const realBase = await fs.realpath(base).catch(() => base)
-    const realTarget = await fs.realpath(target).catch(() => target)
+    let realBase: string
+    let realTarget: string
+    try {
+      realBase = await ensureCanonicalBase(base)
+      realTarget = await strictRealpath(target)
+    } catch (error) {
+      if (error instanceof PathNotFoundError) {
+        return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
+      }
+      throw error
+    }
     if (!withinBase(realBase, realTarget)) {
       return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
     }
@@ -161,7 +213,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   tools.push(
     tool({
       name: "list",
-      description: "Browse files or directories under a directory. Use this when you want to inspect what is present before choosing a path or pattern.",
+      description: "Browse files and/or directories under a directory. Use this when you want to inspect directory contents before choosing a file path or glob pattern.",
       parameters: {
         path: z.string().optional().describe("The directory to browse, such as \"~/my-project\" or \"/Users/john/workspace\"."),
         ignore: z.array(z.string()).optional().describe("Glob patterns to skip while browsing, such as [\"dist/**\", \"coverage/**\", \"build/**\"]."),
@@ -220,26 +272,24 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   tools.push(
     tool({
       name: "glob",
-      description: "Find paths under a directory by glob pattern. Use this when you know what the path should look like and want matching files, directories, or both.",
+      description: "Find matching file paths under a directory by glob pattern. Use this when you know what the file path should look like and want matching files only.",
       parameters: {
-        pattern: z.string().describe("The path pattern to match, such as \"*.ts\", \"*Tests.ts\", \"src/**\", or \"**/components\"."),
+        pattern: z.string().describe("The file path pattern to match, such as \"*.ts\", \"*Tests.ts\", \"**/*.generated.ts\", or \"src/**/*.ts\"."),
         path: z.string().optional().describe("The directory to search from, such as \"~/my-project\" or \"/Users/john/workspace\"."),
-        type: z.enum(["files", "directories", "all"]).optional().describe("What kinds of paths to return: \"files\" (default), \"directories\", or \"all\"."),
-        include: z.array(z.string()).optional().describe("Extra glob patterns to include in the search. For files, these are combined with pattern (union). For directories, they further filter which directories are returned (intersection)."),
+        include: z.array(z.string()).optional().describe("Extra file glob patterns to include in the search. These are combined with pattern using union semantics."),
         exclude: z.array(z.string()).optional().describe("Glob patterns to leave out of the results, such as [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
         offset: z.number().int().min(1).optional().describe("The 1-indexed result number to start from when paging through matches. Default: 1."),
         limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("The maximum number of matches to return in one call. Default: 100."),
       },
-      implementation: async ({ pattern, path: input, type, include, exclude, offset, limit }) => {
+      implementation: async ({ pattern, path: input, include, exclude, offset, limit }) => {
         const base = baseDir()
         const dir = resolveInputPath(base, input)
         if (isErrorOutput(dir)) return dir
         const checked = await ensureDirectoryWithinBase(base, dir)
         if (checked.error) return checked.error
-        const kind = type ?? "files"
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
-        const files = await globWithRipgrep({ baseDir: base, dir, pattern, type: kind, include, exclude })
+        const files = await globWithRipgrep({ baseDir: base, dir, pattern, include, exclude })
         if (isErrorResult(files)) return files
         if (files.length < (offset ?? 1) && !(files.length === 0 && (offset ?? 1) === 1)) {
           return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", files.length], ["unit", "entries"]])
@@ -249,7 +299,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const hasMore = start + slice.length < files.length
         return formatOutput([
           ["path", dir],
-          ["type", kind],
+          ["type", "files"],
           ["pattern", pattern],
           ["offset", offset ?? 1],
           ["limit", slice.length],
@@ -266,11 +316,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     tool({
       name: "grep",
       description:
-        "Search text inside files by regular expression. Use this when you know the content you want to find, not the file name or path.",
+        "Search text inside files by regular expression. Use this when you know the text or pattern you want to find, not the file name.",
       parameters: {
         pattern: z.string().describe("The regular expression to search for inside file contents, such as \"TODO\", \"describe\\\\(\", or \"export\\\\s+const\"."),
         path: z.string().optional().describe("The directory to search from, such as \"~/my-project\" or \"/Users/john/workspace\"."),
-        include: z.array(z.string()).optional().describe("Extra glob patterns that narrow the search to specific files, such as [\"*.ts\"] to search TypeScript files or [\"src/**\"] to search only files under \"~/my-project/src\"."),
+        include: z.array(z.string()).optional().describe("Glob patterns for which files to search, such as [\"*.ts\", \"*.js\"] to search TypeScript and Javascript files or [\"src/**\"] to search only files under \"src\"."),
         exclude: z.array(z.string()).optional().describe("Glob patterns to leave out of the search, such as [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
       },
       implementation: async ({ pattern, path: input, include, exclude }) => {

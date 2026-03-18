@@ -4,12 +4,14 @@ import os from "node:os"
 import path from "node:path"
 import {
   expandHome,
+  PathNotFoundError,
   PathOutsideBaseError,
   resolvePath,
   relPath,
   compile,
   ignored,
   blocked,
+  strictRealpath,
   walk,
   binary,
   formatTree,
@@ -123,17 +125,23 @@ describe("compile and matching", () => {
     expect(compile()).toHaveLength(0)
   })
 
-  it("compiles patterns into Minimatch instances", () => {
+  it("expands basename patterns for any-depth matching", () => {
     const matchers = compile(["*.ts", "dist/**"])
-    expect(matchers).toHaveLength(2)
+    expect(matchers).toHaveLength(3)
     expect(matchers[0].match("foo.ts")).toBe(true)
     expect(matchers[0].match("foo.js")).toBe(false)
   })
 
-  it("matches only relative path values", () => {
+  it("matches nested paths for basename patterns", () => {
     const matchers = compile(["*.ts"])
     expect(matchesPattern("root.ts", matchers)).toBe(true)
-    expect(matchesPattern("src/index.ts", matchers)).toBe(false)
+    expect(matchesPattern("src/index.ts", matchers)).toBe(true)
+  })
+
+  it("matches case-sensitively", () => {
+    const matchers = compile(["**/*.ts"])
+    expect(matchesPattern("src/index.ts", matchers)).toBe(true)
+    expect(matchesPattern("src/MixedCase.TS", matchers)).toBe(false)
   })
 })
 
@@ -246,15 +254,20 @@ describe("walk", () => {
     expect((await walk(tmp, { type: "directories" })).every((i) => i.dir)).toBe(true)
   })
 
-  it("respects include filter with root-relative semantics", async () => {
+  it("treats basename include patterns as any-depth", async () => {
     const items = await walk(tmp, { type: "files", include: ["*.ts"] })
-    expect(items.map((i) => relPath(tmp, i.path))).toEqual([])
+    expect(items.map((i) => relPath(tmp, i.path))).toEqual([
+      "src/index.ts",
+      "src/lib/helper.ts",
+      "src/utils.ts",
+    ])
   })
 
-  it("respects recursive include filter", async () => {
+  it("respects recursive include filter case-sensitively", async () => {
     const items = await walk(tmp, { type: "files", include: ["**/*.ts"] })
     expect(items.every((i) => i.path.endsWith(".ts"))).toBe(true)
     expect(items.length).toBeGreaterThan(0)
+    expect(items.map((i) => relPath(tmp, i.path))).not.toContain("src/MixedCase.TS")
   })
 
   it("respects exclude filter", async () => {
@@ -285,9 +298,19 @@ describe("walk", () => {
     expect(names).not.toContain("hello-link.txt")
   })
 
-  it("throws when the starting directory resolves outside the sandbox base", async () => {
+  it("treats a root directory symlink as not found", async () => {
     if (!linkSupport.dirLinks) return
-    await expect(walk(path.join(tmp, "linked-outside-dir"), { baseDir: tmp })).rejects.toThrow(PathOutsideBaseError)
+    await expect(walk(path.join(tmp, "linked-outside-dir"), { baseDir: tmp })).rejects.toThrow(PathNotFoundError)
+  })
+})
+
+describe("strictRealpath", () => {
+  it("resolves existing paths", async () => {
+    await expect(strictRealpath(path.join(tmp, "hello.txt"))).resolves.toBe(await fs.realpath(path.join(tmp, "hello.txt")))
+  })
+
+  it("throws PathNotFoundError for missing paths", async () => {
+    await expect(strictRealpath(path.join(tmp, "nope"))).rejects.toThrow(PathNotFoundError)
   })
 })
 
@@ -355,7 +378,7 @@ describe("formatTree", () => {
 })
 
 describe("walk error handling", () => {
-  it("returns empty results when the base directory cannot be read", async () => {
-    await expect(walk(path.join(tmp, "missing-dir"))).resolves.toEqual([])
+  it("fails closed when the base directory cannot be read", async () => {
+    await expect(walk(path.join(tmp, "missing-dir"))).rejects.toThrow(PathNotFoundError)
   })
 })

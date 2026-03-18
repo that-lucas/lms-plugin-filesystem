@@ -1,9 +1,8 @@
 import * as fs from "node:fs/promises"
 import path from "node:path"
-import { Minimatch } from "minimatch"
 import { formatError } from "./errors"
 import { DEFAULT_EXECUTABLE_DIRS, resolveExecutable, runSubprocess, type RunSubprocessResult } from "./subprocess"
-import { blocked, defaultIgnoreList, relPath, SYSTEM_IGNORES, walk } from "./utils"
+import { blocked, defaultIgnoreList, SYSTEM_IGNORES } from "./utils"
 
 export const RIPGREP_TIMEOUT_MS = 60_000
 export const RIPGREP_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
@@ -33,7 +32,6 @@ type RipgrepGlobOptions = {
   baseDir: string
   dir: string
   pattern: string
-  type?: "files" | "directories" | "all"
   include?: string[]
   exclude?: string[]
 }
@@ -249,39 +247,11 @@ export async function globWithRipgrep({
   baseDir,
   dir,
   pattern,
-  type,
   include,
   exclude,
 }: RipgrepGlobOptions): Promise<string[] | string> {
   if (blocked(dir, baseDir)) return []
-
-  const kind = type ?? "files"
-  const entries: GlobEntry[] = []
-
-  if (kind !== "directories") {
-    const files = await collectFileEntries(baseDir, dir, pattern, include, exclude)
-    if (isErrorResult(files)) return files
-
-    entries.push(...files)
-  }
-
-  if (kind !== "files") {
-    const matcher = new Minimatch(pattern, { dot: true, nocase: true })
-    const dirs = await walk(dir, { recursive: true, type: "directories", include, exclude, baseDir })
-    const dirEntries = (await Promise.all(
-      dirs.map(async (item) => {
-        const stat = await fs.stat(item.path).catch(() => undefined)
-        if (!stat) return undefined
-        return { path: item.path, time: stat.mtime.getTime() }
-      }),
-    )).filter((entry): entry is GlobEntry => entry !== undefined)
-
-    for (const entry of dirEntries) {
-      const rel = relPath(dir, entry.path)
-      if (!matcher.match(rel)) continue
-      entries.push(entry)
-    }
-  }
-
-  return sortEntries(entries).map((entry) => entry.path)
+  const files = await collectFileEntries(baseDir, dir, pattern, include, exclude)
+  if (isErrorResult(files)) return files
+  return sortEntries(files).map((entry) => entry.path)
 }

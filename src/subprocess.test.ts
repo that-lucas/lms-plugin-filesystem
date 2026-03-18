@@ -135,20 +135,19 @@ describe("runSubprocess", () => {
     expect(result.stdout).toBe(realSubdir)
   })
 
-  it("returns the canonical cwd after validating a symlink within the base directory", async () => {
+  it("treats root symlink cwd values as not found", async () => {
     if (!linkSupport.dirLinks) return
-    const realSubdir = await fs.realpath(path.join(baseDir, "subdir"))
-    const result = await runSubprocess({
-      command: process.execPath,
-      args: ["-e", 'process.stdout.write(process.cwd())'],
-      baseDir,
-      cwd: "inside-link",
-    })
-
-    expect(result.stdout).toBe(realSubdir)
+    await expect(
+      runSubprocess({
+        command: process.execPath,
+        args: ["-e", 'process.stdout.write(process.cwd())'],
+        baseDir,
+        cwd: "inside-link",
+      }),
+    ).rejects.toThrow("Path not found")
   })
 
-  it("rejects symlinked cwd values that escape the base directory", async () => {
+  it("treats root symlink cwd values outside the base as not found", async () => {
     if (!linkSupport.dirLinks) return
     await expect(
       runSubprocess({
@@ -157,7 +156,7 @@ describe("runSubprocess", () => {
         baseDir,
         cwd: "outside-link",
       }),
-    ).rejects.toThrow("Working directory is outside the configured base directory")
+    ).rejects.toThrow("Path not found")
   })
 
   it("times out long-running subprocesses", async () => {
