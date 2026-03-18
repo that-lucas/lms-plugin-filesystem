@@ -8,7 +8,7 @@ describe("tool contracts", () => {
       getPluginConfig: () => ({ get: () => process.cwd() }),
     } as any)
 
-    expect(tools.map((tool) => (tool as any).name)).toEqual(["read", "list", "glob", "grep", "create", "edit"])
+    expect(tools.map((tool) => (tool as any).name)).toEqual(["list", "glob", "grep", "read", "create", "edit"])
   })
 
   it("declares descriptions and implementations on each tool", async () => {

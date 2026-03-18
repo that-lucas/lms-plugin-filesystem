@@ -19,6 +19,7 @@ Run from the repository root.
 
 - `npm install` - install dependencies
 - `npm test` - run the test suite
+- `npm run typecheck` - run the TypeScript type checker without emitting files
 - `npm run dev` - start local LM Studio plugin development
 - `npm run install:local` - install plugin locally using a filtered temporary artifact
 - `npm run push` - publish a filtered runtime-only artifact with `lms push`

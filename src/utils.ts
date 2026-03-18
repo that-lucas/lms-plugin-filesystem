@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { Minimatch } from "minimatch"
 
-export const READ_LIMIT = 2000
+export const READ_LIMIT = 500
 export const FILE_LIMIT = 100
 export const DEFAULT_IGNORES = [
   ".git",
@@ -80,7 +80,7 @@ export type WalkOptions = {
   exclude?: string[]
   recursive?: boolean
   type?: "all" | "files" | "directories"
-  baseDir?: string
+  sandboxBaseDir?: string
 }
 
 export const IGNORE_PATHS_ENV = "LMS_FILESYSTEM_IGNORE_PATHS"
@@ -89,7 +89,7 @@ export class PathOutsideBaseError extends Error {
   filePath: string
 
   constructor(filePath: string) {
-    super(`Path is outside the configured base directory: ${filePath}`)
+    super(`Path is outside the configured sandbox base directory: ${filePath}`)
     this.name = "PathOutsideBaseError"
     this.filePath = filePath
   }
@@ -160,7 +160,7 @@ export const walk = async (base: string, realBase: string, opts?: WalkOptions) =
   const defaultMatchers = compile(defaults)
   const recursive = opts?.recursive ?? true
   const type = opts?.type ?? "all"
-  const sandboxBase = opts?.baseDir ?? base
+  const sandboxBase = opts?.sandboxBaseDir ?? base
   const rootCheck = await inspectTraversalRoot(sandboxBase, base)
   if (!rootCheck.ok) {
     throw new Error(rootCheck.details ?? rootCheck.kind)

@@ -5,24 +5,24 @@ import path from "node:path"
 import { resolveExecutable, runSubprocess } from "./subprocess"
 import { createLink, detectLinkSupport, type LinkSupport } from "./testSupport"
 
-let baseDir: string
+let sandboxBaseDir: string
 let outsideDir: string
 let linkSupport: LinkSupport
 
 beforeAll(async () => {
-  baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-subprocess-"))
+  sandboxBaseDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-subprocess-"))
   outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "fs-plugin-subprocess-outside-"))
-  linkSupport = await detectLinkSupport(path.join(baseDir, "subprocess-link-check"))
+  linkSupport = await detectLinkSupport(path.join(sandboxBaseDir, "subprocess-link-check"))
 
-  await fs.mkdir(path.join(baseDir, "subdir"), { recursive: true })
+  await fs.mkdir(path.join(sandboxBaseDir, "subdir"), { recursive: true })
   if (linkSupport.dirLinks) {
-    await createLink(path.join(baseDir, "subdir"), path.join(baseDir, "inside-link"), "dir")
-    await createLink(outsideDir, path.join(baseDir, "outside-link"), "dir")
+    await createLink(path.join(sandboxBaseDir, "subdir"), path.join(sandboxBaseDir, "inside-link"), "dir")
+    await createLink(outsideDir, path.join(sandboxBaseDir, "outside-link"), "dir")
   }
 })
 
 afterAll(async () => {
-  await fs.rm(baseDir, { recursive: true, force: true })
+  await fs.rm(sandboxBaseDir, { recursive: true, force: true })
   await fs.rm(outsideDir, { recursive: true, force: true })
 })
 
@@ -68,7 +68,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stdout.write("ok")'],
-      baseDir,
+      sandboxBaseDir,
     })
 
     expect(result).toEqual({
@@ -85,7 +85,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stderr.write("bad"); process.exit(7)'],
-      baseDir,
+      sandboxBaseDir,
     })
 
     expect(result).toEqual({
@@ -100,8 +100,8 @@ describe("runSubprocess", () => {
 
   it("returns spawn errors for missing executables", async () => {
     const result = await runSubprocess({
-      command: path.join(baseDir, "missing-command"),
-      baseDir,
+      command: path.join(sandboxBaseDir, "missing-command"),
+      sandboxBaseDir,
     })
 
     expect(result.exitCode).toBeNull()
@@ -112,23 +112,23 @@ describe("runSubprocess", () => {
     expect(result.spawnError).toContain("ENOENT")
   })
 
-  it("uses baseDir as the default cwd", async () => {
-    const realBaseDir = await fs.realpath(baseDir)
+  it("uses sandboxBaseDir as the default cwd", async () => {
+    const realBaseDir = await fs.realpath(sandboxBaseDir)
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stdout.write(process.cwd())'],
-      baseDir,
+      sandboxBaseDir,
     })
 
     expect(result.stdout).toBe(realBaseDir)
   })
 
-  it("resolves a relative cwd within the base directory", async () => {
-    const realSubdir = await fs.realpath(path.join(baseDir, "subdir"))
+  it("resolves a relative cwd within the sandbox base directory", async () => {
+    const realSubdir = await fs.realpath(path.join(sandboxBaseDir, "subdir"))
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stdout.write(process.cwd())'],
-      baseDir,
+      sandboxBaseDir,
       cwd: "subdir",
     })
 
@@ -141,7 +141,7 @@ describe("runSubprocess", () => {
       runSubprocess({
         command: process.execPath,
         args: ["-e", 'process.stdout.write(process.cwd())'],
-        baseDir,
+        sandboxBaseDir,
         cwd: "inside-link",
       }),
     ).rejects.toThrow("Working directory validation failed")
@@ -153,7 +153,7 @@ describe("runSubprocess", () => {
       runSubprocess({
         command: process.execPath,
         args: ["-e", 'process.stdout.write("nope")'],
-        baseDir,
+        sandboxBaseDir,
         cwd: "outside-link",
       }),
     ).rejects.toThrow("Working directory validation failed")
@@ -164,7 +164,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", "setTimeout(() => {}, 10_000)"],
-      baseDir,
+      sandboxBaseDir,
       timeoutMs: 50,
     })
 
@@ -177,7 +177,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stdout.write("out"); process.stderr.write("err")'],
-      baseDir,
+      sandboxBaseDir,
     })
 
     expect(result.stdout).toBe("out")
@@ -188,7 +188,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stdout.write("a".repeat(256)); setTimeout(() => {}, 10_000)'],
-      baseDir,
+      sandboxBaseDir,
       maxOutputBytes: 64,
       timeoutMs: 2_000,
     })
@@ -201,7 +201,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", 'process.stdin.setEncoding("utf8"); let body=""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => process.stdout.write(body.toUpperCase()))'],
-      baseDir,
+      sandboxBaseDir,
       stdin: "hello",
     })
 
@@ -212,7 +212,7 @@ describe("runSubprocess", () => {
     const result = await runSubprocess({
       command: process.execPath,
       args: ["-e", "process.exit(0)"],
-      baseDir,
+      sandboxBaseDir,
       stdin: "hello",
     })
 
@@ -225,7 +225,7 @@ describe("runSubprocess", () => {
       runSubprocess({
         command: "node",
         args: ["-e", 'process.stdout.write("x")'],
-        baseDir,
+        sandboxBaseDir,
       }),
     ).rejects.toThrow("Command must be an absolute path")
   })

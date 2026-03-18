@@ -13,7 +13,7 @@ export type BoundaryFailureKind =
   | "broken_link"
   | "symlink_loop"
   | "canonicalization_failed"
-  | "base_dir_invalid"
+  | "sandbox_base_dir_invalid"
 
 export type BoundaryExpectedKind = "file" | "directory" | "any"
 
@@ -241,27 +241,27 @@ const canonicalizeRequired = async (
   )
 }
 
-export async function resolveConfiguredBaseDir(input?: string): Promise<BoundaryResult> {
+export async function resolveConfiguredSandboxBaseDir(input?: string): Promise<BoundaryResult> {
   const requestedPath = input?.trim() || "~"
   const resolvedPath = path.resolve(expandHome(requestedPath))
 
   try {
     const stat = await fs.lstat(resolvedPath)
     if (stat.isSymbolicLink()) {
-      return boundaryFailure("base_dir_invalid", requestedPath, resolvedPath, "directory", `Base directory must not be a symbolic link: ${resolvedPath}`)
+      return boundaryFailure("sandbox_base_dir_invalid", requestedPath, resolvedPath, "directory", `Sandbox base directory must not be a symbolic link: ${resolvedPath}`)
     }
     if (!stat.isDirectory()) {
-      return boundaryFailure("base_dir_invalid", requestedPath, resolvedPath, "directory", `Base directory is not a directory: ${resolvedPath}`)
+      return boundaryFailure("sandbox_base_dir_invalid", requestedPath, resolvedPath, "directory", `Sandbox base directory is not a directory: ${resolvedPath}`)
     }
 
     const realBase = await realpathWithError(resolvedPath)
     if (!realBase.ok) {
       return boundaryFailure(
-        "base_dir_invalid",
+        "sandbox_base_dir_invalid",
         requestedPath,
         resolvedPath,
         "directory",
-        `Failed to canonicalize base directory ${resolvedPath}: ${formatDetails(realBase.error)}`,
+        `Failed to canonicalize sandbox base directory ${resolvedPath}: ${formatDetails(realBase.error)}`,
       )
     }
 
@@ -269,14 +269,14 @@ export async function resolveConfiguredBaseDir(input?: string): Promise<Boundary
   } catch (error) {
     const nativeError = error as NativeFsError
     if (nativeError.code === "ENOENT") {
-      return boundaryFailure("base_dir_invalid", requestedPath, resolvedPath, "directory", `Base directory does not exist: ${resolvedPath}`)
+      return boundaryFailure("sandbox_base_dir_invalid", requestedPath, resolvedPath, "directory", `Sandbox base directory does not exist: ${resolvedPath}`)
     }
     return boundaryFailure(
-      "base_dir_invalid",
+      "sandbox_base_dir_invalid",
       requestedPath,
       resolvedPath,
       "directory",
-      `Failed to inspect base directory ${resolvedPath}: ${formatDetails(nativeError)}`,
+      `Failed to inspect sandbox base directory ${resolvedPath}: ${formatDetails(nativeError)}`,
     )
   }
 }

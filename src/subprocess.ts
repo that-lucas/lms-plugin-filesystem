@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import { constants as fsConstants } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
-import { inspectTraversalRoot, resolveConfiguredBaseDir, resolveUserPath } from "./boundary"
+import { inspectTraversalRoot, resolveConfiguredSandboxBaseDir, resolveUserPath } from "./boundary"
 
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 10_000
 export const DEFAULT_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
@@ -17,7 +17,7 @@ export const DEFAULT_EXECUTABLE_DIRS = [
 export type RunSubprocessOptions = {
   command: string
   args?: string[]
-  baseDir: string
+  sandboxBaseDir: string
   cwd?: string
   timeoutMs?: number
   maxOutputBytes?: number
@@ -64,21 +64,21 @@ export async function resolveExecutable(command: string, envPath = process.env.P
   return undefined
 }
 
-const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {
-  const base = await resolveConfiguredBaseDir(baseDir)
+const resolveSubprocessCwd = async (sandboxBaseDir: string, cwd?: string) => {
+  const base = await resolveConfiguredSandboxBaseDir(sandboxBaseDir)
   if (!base.ok) {
     throw new Error(`Working directory validation failed: ${base.details ?? base.resolvedPath}`)
   }
 
   const resolved = resolveUserPath(base.resolvedPath, cwd)
   if (!resolved.ok) {
-    throw new Error(`Working directory is outside the configured base directory: ${resolved.resolvedPath}`)
+    throw new Error(`Working directory is outside the configured sandbox base directory: ${resolved.resolvedPath}`)
   }
 
   const inspected = await inspectTraversalRoot(base.resolvedPath, resolved.resolvedPath)
   if (!inspected.ok) {
     if (inspected.kind === "outside_base") {
-      throw new Error(`Working directory is outside the configured base directory: ${inspected.resolvedPath}`)
+      throw new Error(`Working directory is outside the configured sandbox base directory: ${inspected.resolvedPath}`)
     }
     if (inspected.kind === "not_found") {
       throw new Error(`Working directory not found: ${inspected.resolvedPath}`)
@@ -95,7 +95,7 @@ const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {
 export async function runSubprocess({
   command,
   args = [],
-  baseDir,
+  sandboxBaseDir,
   cwd,
   timeoutMs = DEFAULT_SUBPROCESS_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_SUBPROCESS_MAX_OUTPUT_BYTES,
@@ -112,7 +112,7 @@ export async function runSubprocess({
     throw new Error(`maxOutputBytes must be greater than 0: ${maxOutputBytes}`)
   }
 
-  const resolvedCwd = await resolveSubprocessCwd(baseDir, cwd)
+  const resolvedCwd = await resolveSubprocessCwd(sandboxBaseDir, cwd)
 
   return await new Promise((resolve) => {
     const stdoutChunks: Buffer[] = []

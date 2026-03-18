@@ -27,9 +27,9 @@ Click the "Run in LM Studio" button to add the plugin.
 
 ## Configuration
 
-### Base Directory
+### Sandbox Base Directory
 
-The plugin can be scoped to a base directory through its LM Studio configuration. If not set, the default base directory is the user's home directory (`~/`).
+The plugin can be scoped to a sandbox base directory through its LM Studio configuration. This setting defines the sandbox boundary for all tool paths. If not set, the sandbox base directory defaults to the user's home directory (`~/`).
 
 ### Ignored Paths
 

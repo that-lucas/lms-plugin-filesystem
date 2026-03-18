@@ -52,7 +52,7 @@ beforeAll(async () => {
 
   const mockCtl = {
     getPluginConfig: () => ({
-      get: (key: string) => key === "baseDir" ? FIXTURE_DIR : undefined,
+      get: (key: string) => key === "sandboxBaseDir" ? FIXTURE_DIR : undefined,
     }),
   } as any
 
@@ -64,7 +64,7 @@ beforeAll(async () => {
 
   const rootCtl = {
     getPluginConfig: () => ({
-      get: (key: string) => key === "baseDir" ? "/" : undefined,
+      get: (key: string) => key === "sandboxBaseDir" ? "/" : undefined,
     }),
   } as any
 
@@ -104,8 +104,8 @@ describe("home-relative paths", () => {
   })
 })
 
-describe("path outside base directory", () => {
-  it("read returns error for absolute path outside base", async () => {
+describe("path outside sandbox base directory", () => {
+  it("read returns error for absolute path outside sandbox base", async () => {
     expect(parseError(await tools.read({ filePath: "/etc/passwd" })).code).toBe("path_outside_base")
   })
 
@@ -113,24 +113,24 @@ describe("path outside base directory", () => {
     expect(parseError(await tools.read({ filePath: "../../etc/passwd" })).code).toBe("path_outside_base")
   })
 
-  it("list returns error for path outside base", async () => {
+  it("list returns error for path outside sandbox base", async () => {
     expect(parseError(await tools.list({ path: "/etc" })).code).toBe("path_outside_base")
   })
 
-  it("glob returns error for path outside base", async () => {
+  it("glob returns error for path outside sandbox base", async () => {
     expect(parseError(await tools.glob({ pattern: "*", path: "/etc" })).code).toBe("path_outside_base")
   })
 
-  it("grep returns error for path outside base", async () => {
+  it("grep returns error for path outside sandbox base", async () => {
     expect(parseError(await tools.grep({ pattern: "root", path: "/etc" })).code).toBe("path_outside_base")
   })
 
-  it("create returns error for path outside base", async () => {
-    expect(parseError(await tools.create({ type: "file", path: "/tmp/outside.txt", content: "x" })).code).toBe("path_outside_base")
+  it("create returns error for path outside sandbox base", async () => {
+    expect(parseError(await tools.create({ type: "file", path: "/tmp/outside.txt", fileContent: "x" })).code).toBe("path_outside_base")
   })
 
-  it("edit returns error for path outside base", async () => {
-    expect(parseError(await tools.edit({ path: "/tmp/outside.txt", edits: [{ oldString: "a", newString: "b" }] })).code).toBe("path_outside_base")
+  it("edit returns error for path outside sandbox base", async () => {
+    expect(parseError(await tools.edit({ filePath: "/tmp/outside.txt", edits: [{ oldString: "a", newString: "b" }] })).code).toBe("path_outside_base")
   })
 })
 

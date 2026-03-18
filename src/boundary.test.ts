@@ -6,7 +6,7 @@ import {
   inspectCreateTarget,
   inspectExistingPath,
   inspectNestedEntry,
-  resolveConfiguredBaseDir,
+  resolveConfiguredSandboxBaseDir,
   resolveUserPath,
 } from "./boundary"
 import {
@@ -45,22 +45,22 @@ afterAll(async () => {
 })
 
 describe("boundary", () => {
-  it("accepts a valid configured base directory", async () => {
-    const result = await resolveConfiguredBaseDir(tmp)
+  it("accepts a valid configured sandbox base directory", async () => {
+    const result = await resolveConfiguredSandboxBaseDir(tmp)
     expect(result.ok).toBe(true)
   })
 
-  it("rejects a missing configured base directory", async () => {
-    const result = await resolveConfiguredBaseDir(path.join(tmp, "missing-base"))
-    expect(result).toMatchObject({ ok: false, kind: "base_dir_invalid" })
+  it("rejects a missing configured sandbox base directory", async () => {
+    const result = await resolveConfiguredSandboxBaseDir(path.join(tmp, "missing-base"))
+    expect(result).toMatchObject({ ok: false, kind: "sandbox_base_dir_invalid" })
   })
 
-  it("rejects a symlinked configured base directory", async () => {
+  it("rejects a symlinked configured sandbox base directory", async () => {
     if (!linkSupport.dirLinks) return
-    const linkPath = path.join(tmp, "base-link")
+    const linkPath = path.join(tmp, "sandbox-base-link")
     await createLink(path.join(tmp, "dir"), linkPath, "dir")
-    const result = await resolveConfiguredBaseDir(linkPath)
-    expect(result).toMatchObject({ ok: false, kind: "base_dir_invalid" })
+    const result = await resolveConfiguredSandboxBaseDir(linkPath)
+    expect(result).toMatchObject({ ok: false, kind: "sandbox_base_dir_invalid" })
   })
 
   it("rejects lexical outside-base paths", () => {
@@ -150,7 +150,7 @@ describe("boundary", () => {
     if (!linkSupport.fileSymlinks) return
     const linkPath = path.join(tmp, "nested-file-link.txt")
     await createLink(path.join(tmp, "dir", "nested", "file.txt"), linkPath)
-    const base = await resolveConfiguredBaseDir(tmp)
+    const base = await resolveConfiguredSandboxBaseDir(tmp)
     if (!base.ok) throw new Error("base failed")
     const result = await inspectNestedEntry(base.realBase, linkPath, "file")
     expect(result).toMatchObject({ ok: false, kind: "symlink_root" })
@@ -160,7 +160,7 @@ describe("boundary", () => {
     if (!linkSupport.dirLinks) return
     const linkPath = path.join(tmp, "nested-dir-link")
     await createLink(path.join(tmp, "dir"), linkPath, "dir")
-    const base = await resolveConfiguredBaseDir(tmp)
+    const base = await resolveConfiguredSandboxBaseDir(tmp)
     if (!base.ok) throw new Error("base failed")
     const result = await inspectNestedEntry(base.realBase, linkPath, "directory")
     expect(result).toMatchObject({ ok: false, kind: "symlink_root" })

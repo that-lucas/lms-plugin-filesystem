@@ -28,7 +28,7 @@ export type RipgrepMatch = {
 }
 
 type RipgrepGlobOptions = {
-  baseDir: string
+  sandboxBaseDir: string
   realBase: string
   dir: string
   pattern: string
@@ -98,7 +98,7 @@ const ripgrepNotFoundDetail = () =>
 const isRegexParseFailure = (stderr: string) =>
   stderr.includes("regex parse error") || stderr.includes("could not be compiled") || stderr.includes("error compiling pattern")
 
-async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise<RunSubprocessResult | string> {
+async function runRipgrep(sandboxBaseDir: string, cwd: string, args: string[]): Promise<RunSubprocessResult | string> {
   const executable = await resolveExecutable("rg")
   if (!executable) return ripgrepError(ripgrepNotFoundDetail())
 
@@ -107,16 +107,16 @@ async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise
     result = await runSubprocess({
       command: executable,
       args,
-      baseDir,
+      sandboxBaseDir,
       cwd,
       timeoutMs: RIPGREP_TIMEOUT_MS,
       maxOutputBytes: RIPGREP_MAX_OUTPUT_BYTES,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const outsidePrefix = "Working directory is outside the configured base directory: "
+    const outsidePrefix = "Working directory is outside the configured sandbox base directory: "
     if (message.startsWith(outsidePrefix)) {
-      return formatError("path_outside_base", "Path is outside the configured base directory", [["path", cwd]])
+      return formatError("path_outside_base", "Path is outside the configured sandbox base directory", [["path", cwd]])
     }
     return ripgrepError(message)
   }
@@ -130,7 +130,7 @@ async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise
 
 const sortEntries = (items: GlobEntry[]) => items.sort((a, b) => b.time - a.time)
 
-const collectFileEntries = async (baseDir: string, realBase: string, dir: string, pattern: string, include?: string[], exclude?: string[]) => {
+const collectFileEntries = async (sandboxBaseDir: string, realBase: string, dir: string, pattern: string, include?: string[], exclude?: string[]) => {
   const defaults = defaultIgnoreList()
   const userGlobs = [
     "--glob",
@@ -138,7 +138,7 @@ const collectFileEntries = async (baseDir: string, realBase: string, dir: string
     ...(include || []).flatMap((item) => ["--glob", item]),
     ...(exclude || []).flatMap((item) => ["--glob", `!${item}`]),
   ]
-  const result = await runRipgrep(baseDir, dir, [
+  const result = await runRipgrep(sandboxBaseDir, dir, [
     "--files",
     "--hidden",
     "--no-ignore",
@@ -169,21 +169,21 @@ const collectFileEntries = async (baseDir: string, realBase: string, dir: string
 }
 
 export async function grepWithRipgrep({
-  baseDir,
+  sandboxBaseDir,
   realBase,
   dir,
   pattern,
   include,
   exclude,
 }: {
-  baseDir: string
+  sandboxBaseDir: string
   realBase: string
   dir: string
   pattern: string
   include?: string[]
   exclude?: string[]
 }): Promise<RipgrepMatch[] | string> {
-  if (blocked(dir, baseDir)) return []
+  if (blocked(dir, sandboxBaseDir)) return []
 
   const defaults = defaultIgnoreList()
   const userGlobs = [
@@ -191,7 +191,7 @@ export async function grepWithRipgrep({
     ...(exclude || []).flatMap((item) => ["--glob", `!${item}`]),
   ]
 
-  const result = await runRipgrep(baseDir, dir, [
+  const result = await runRipgrep(sandboxBaseDir, dir, [
     "--json",
     "--engine",
     "auto",
@@ -248,15 +248,15 @@ export async function grepWithRipgrep({
 }
 
 export async function globWithRipgrep({
-  baseDir,
+  sandboxBaseDir,
   realBase,
   dir,
   pattern,
   include,
   exclude,
 }: RipgrepGlobOptions): Promise<string[] | string> {
-  if (blocked(dir, baseDir)) return []
-  const files = await collectFileEntries(baseDir, realBase, dir, pattern, include, exclude)
+  if (blocked(dir, sandboxBaseDir)) return []
+  const files = await collectFileEntries(sandboxBaseDir, realBase, dir, pattern, include, exclude)
   if (isErrorResult(files)) return files
   return sortEntries(files).map((entry) => entry.path)
 }

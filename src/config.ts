@@ -2,12 +2,12 @@ import { createConfigSchematics } from "@lmstudio/sdk"
 
 export const configSchematics = createConfigSchematics()
   .field(
-    "baseDir",
+    "sandboxBaseDir",
     "string",
     {
-      displayName: "Base Directory",
-      subtitle: "Optional override. Leave empty to use the user's home directory.",
-      placeholder: "/Users/name/project",
+      displayName: "Sandbox Base Directory",
+      subtitle: "Optional sandbox root. Leave empty to use the user's home directory as the sandbox.",
+      placeholder: "~/project",
       isParagraph: false,
     },
     "",

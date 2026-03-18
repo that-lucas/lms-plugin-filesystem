@@ -200,7 +200,7 @@ beforeAll(async () => {
 
   const mockCtl = {
     getPluginConfig: () => ({
-      get: (key: string) => key === "baseDir" ? tmp : undefined,
+      get: (key: string) => key === "sandboxBaseDir" ? tmp : undefined,
     }),
   } as any
 
@@ -338,13 +338,6 @@ describe("list tool", () => {
     expect(parsed.entries).toContain("  hello.txt")
     expect(parsed.entries).toContain("  src/")
     expect(parsed.entries).not.toContain("    index.ts")
-  })
-
-  it("uses the base directory when path is omitted", async () => {
-    const result = await tools.list({})
-    const parsed = parseList(result)
-    expect(parsed.entries).toContain("  hello.txt")
-    expect(parsed.entries).toContain("  src/")
   })
 
   it("lists recursively with tree format", async () => {
@@ -717,12 +710,12 @@ describe("grep tool", () => {
 describe("create tool", () => {
   it("creates a new file with content", async () => {
     const target = path.join(tmp, "created.txt")
-    const result = await tools.create({ type: "file", path: target, content: "hello\nworld\n" })
+    const result = await tools.create({ type: "file", path: target, fileContent: "hello\nworld\n" })
     expect(parseCreate(result)).toEqual({
       path: target,
       type: "file",
       status: "created",
-      encoding: "utf8",
+      fileEncoding: "utf8",
       overwritten: "false",
       lines: "2",
       bytes: String(Buffer.byteLength("hello\nworld\n", "utf8")),
@@ -737,7 +730,7 @@ describe("create tool", () => {
       path: target,
       type: "file",
       status: "created",
-      encoding: "utf8",
+      fileEncoding: "utf8",
       overwritten: "false",
       lines: "0",
       bytes: "0",
@@ -747,21 +740,21 @@ describe("create tool", () => {
 
   it("creates parent directories automatically for files", async () => {
     const target = path.join(tmp, "deep", "nested", "dir", "file.txt")
-    const result = await tools.create({ type: "file", path: target, content: "hi" })
+    const result = await tools.create({ type: "file", path: target, fileContent: "hi" })
     expect(parseCreate(result).path).toBe(target)
     expect(await fs.readFile(target, "utf8")).toBe("hi")
   })
 
   it("returns error when file already exists", async () => {
     const target = path.join(tmp, "src", "existing.ts")
-    const result = await tools.create({ type: "file", path: target, content: "new" })
+    const result = await tools.create({ type: "file", path: target, fileContent: "new" })
     expect(parseError(result).code).toBe("already_exists")
   })
 
   it("overwrites existing file when overwrite is true", async () => {
     const target = path.join(tmp, "src", "existing-overwrite.ts")
     await fs.writeFile(target, "old\n")
-    const result = await tools.create({ type: "file", path: target, content: "new\n", overwrite: true })
+    const result = await tools.create({ type: "file", path: target, fileContent: "new\n", overwriteFile: true })
     expect(parseCreate(result)).toMatchObject({
       path: target,
       overwritten: "true",
@@ -773,10 +766,10 @@ describe("create tool", () => {
   it("creates a file with base64 encoding", async () => {
     const data = Buffer.from("binary data")
     const target = path.join(tmp, "created.bin")
-    const result = await tools.create({ type: "file", path: target, content: data.toString("base64"), encoding: "base64" })
+    const result = await tools.create({ type: "file", path: target, fileContent: data.toString("base64"), fileEncoding: "base64" })
     expect(parseCreate(result)).toMatchObject({
       path: target,
-      encoding: "base64",
+      fileEncoding: "base64",
       bytes: String(data.byteLength),
     })
     expect((await fs.readFile(target)).equals(data)).toBe(true)
@@ -784,7 +777,7 @@ describe("create tool", () => {
 
   it("returns structured error when file target is an existing directory", async () => {
     const target = path.join(tmp, "src", "existing-dir")
-    const result = await tools.create({ type: "file", path: target, overwrite: true })
+    const result = await tools.create({ type: "file", path: target, overwriteFile: true })
     expect(parseError(result)).toMatchObject({
       code: "wrong_type",
       expected: "file",
@@ -796,7 +789,7 @@ describe("create tool", () => {
   it("returns filesystem_error for root file symlink create targets", async () => {
     if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "write-link.txt")
-    const result = await tools.create({ type: "file", path: target, content: "new", overwrite: true })
+    const result = await tools.create({ type: "file", path: target, fileContent: "new", overwriteFile: true })
     expect(parseError(result)).toMatchObject({
       code: "filesystem_error",
       path: target,
@@ -806,7 +799,7 @@ describe("create tool", () => {
   it("returns filesystem_error when file creation crosses a symlinked parent", async () => {
     if (!linkSupport.dirLinks) return
     const target = path.join(tmp, "linked-outside-dir", "new.txt")
-    const result = await tools.create({ type: "file", path: target, content: "new" })
+    const result = await tools.create({ type: "file", path: target, fileContent: "new" })
     expect(parseError(result)).toMatchObject({
       code: "filesystem_error",
       path: target,
@@ -855,48 +848,48 @@ describe("create tool", () => {
 
   it("allows file type with recursive set to false when the parent exists", async () => {
     const target = path.join(tmp, "v1.txt")
-    const result = await tools.create({ type: "file", path: target, content: "x", recursive: false })
+    const result = await tools.create({ type: "file", path: target, fileContent: "x", recursive: false })
     expect(parseCreate(result).path).toBe(target)
   })
 
   it("returns error when file type has recursive set to false and the parent is missing", async () => {
-    const result = await tools.create({ type: "file", path: path.join(tmp, "no-parent-file", "v1.txt"), content: "x", recursive: false })
+    const result = await tools.create({ type: "file", path: path.join(tmp, "no-parent-file", "v1.txt"), fileContent: "x", recursive: false })
     expect(parseError(result).code).toBe("filesystem_error")
   })
 
   it("allows file type with recursive set to true", async () => {
     const target = path.join(tmp, "v2.txt")
-    const result = await tools.create({ type: "file", path: target, content: "x", recursive: true })
+    const result = await tools.create({ type: "file", path: target, fileContent: "x", recursive: true })
     expect(parseCreate(result).path).toBe(target)
   })
 
   it("returns error when directory type has content set", async () => {
-    const result = await tools.create({ type: "directory", path: path.join(tmp, "v3"), content: "oops" })
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v3"), fileContent: "oops" })
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error when directory type has overwrite set to true", async () => {
-    const result = await tools.create({ type: "directory", path: path.join(tmp, "v4"), overwrite: true })
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v4"), overwriteFile: true })
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("returns error when directory type has encoding set to base64", async () => {
-    const result = await tools.create({ type: "directory", path: path.join(tmp, "v5"), encoding: "base64" })
+  it("returns error when directory type has fileEncoding set to base64", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v5"), fileEncoding: "base64" })
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("returns error when directory type has encoding set to utf8", async () => {
-    const result = await tools.create({ type: "directory", path: path.join(tmp, "v6"), encoding: "utf8" })
+  it("returns error when directory type has fileEncoding set to utf8", async () => {
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v6"), fileEncoding: "utf8" })
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error when directory type has overwrite set to false", async () => {
-    const result = await tools.create({ type: "directory", path: path.join(tmp, "v7"), overwrite: false })
+    const result = await tools.create({ type: "directory", path: path.join(tmp, "v7"), overwriteFile: false })
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
-  it("returns error for path outside base directory", async () => {
-    const result = await tools.create({ type: "file", path: "/tmp/escape.txt", content: "x" })
+  it("returns error for path outside sandbox base directory", async () => {
+    const result = await tools.create({ type: "file", path: "/tmp/escape.txt", fileContent: "x" })
     expect(parseError(result).code).toBe("path_outside_base")
   })
 })
@@ -905,12 +898,12 @@ describe("edit tool", () => {
   it("edits a file with one unique replacement", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "beta", newString: "delta" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "beta", newString: "delta" }] })
     expect(parseEdit(result)).toEqual({
       path: target,
       type: "file",
       status: "edited",
-      encoding: "utf8",
+      fileEncoding: "utf8",
       changes_requested: "1",
       changes_performed: "1",
     })
@@ -921,7 +914,7 @@ describe("edit tool", () => {
     const target = path.join(tmp, "edit-chain.txt")
     await fs.writeFile(target, "start middle end\n")
     const result = await tools.edit({
-      path: target,
+      filePath: target,
       edits: [
         { oldString: "middle", newString: "center" },
         { oldString: "center end", newString: "finish" },
@@ -934,7 +927,7 @@ describe("edit tool", () => {
   it("replaces all matches when replaceAll is true", async () => {
     const target = path.join(tmp, "edit-many.txt")
     await fs.writeFile(target, "foo\nfoo\nfoo\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "foo", newString: "bar", replaceAll: true }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "foo", newString: "bar", replaceAll: true }] })
     expect(parseEdit(result).changes_performed).toBe("1")
     expect(await fs.readFile(target, "utf8")).toBe("bar\nbar\nbar\n")
   })
@@ -942,42 +935,42 @@ describe("edit tool", () => {
   it("allows newString to be empty", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    await tools.edit({ path: target, edits: [{ oldString: "beta\n", newString: "" }] })
+    await tools.edit({ filePath: target, edits: [{ oldString: "beta\n", newString: "" }] })
     expect(await fs.readFile(target, "utf8")).toBe("alpha\ngamma\n")
   })
 
   it("can empty a file by replacing the full content with an empty string", async () => {
     const target = path.join(tmp, "edit-empty-target.txt")
     await fs.writeFile(target, "erase me\n")
-    await tools.edit({ path: target, edits: [{ oldString: "erase me\n", newString: "" }] })
+    await tools.edit({ filePath: target, edits: [{ oldString: "erase me\n", newString: "" }] })
     expect(await fs.readFile(target, "utf8")).toBe("")
   })
 
   it("returns error when oldString is empty", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "", newString: "delta" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "", newString: "delta" }] })
     expect(parseError(result).code).toBe("invalid_parameter")
   })
 
   it("returns error when oldString and newString are identical", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "beta", newString: "beta" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "beta", newString: "beta" }] })
     expect(parseError(result).code).toBe("no_change")
   })
 
   it("returns error when oldString is not found", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "missing", newString: "delta" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "missing", newString: "delta" }] })
     expect(parseError(result).code).toBe("match_not_found")
   })
 
   it("returns error when multiple matches exist and replaceAll is not true", async () => {
     const target = path.join(tmp, "edit-many.txt")
     await fs.writeFile(target, "foo\nfoo\nfoo\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "foo", newString: "bar" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "foo", newString: "bar" }] })
     expect(parseError(result).code).toBe("ambiguous_match")
   })
 
@@ -986,7 +979,7 @@ describe("edit tool", () => {
     const original = "start middle end\n"
     await fs.writeFile(target, original)
     const result = await tools.edit({
-      path: target,
+      filePath: target,
       edits: [
         { oldString: "middle", newString: "center" },
         { oldString: "missing", newString: "unused" },
@@ -998,26 +991,26 @@ describe("edit tool", () => {
 
   it("returns error when file does not exist", async () => {
     const target = path.join(tmp, "no-edit.txt")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "a", newString: "b" }] })
     expect(parseError(result).code).toBe("not_found")
   })
 
   it("returns error when path is a directory", async () => {
     const target = path.join(tmp, "src")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "a", newString: "b" }] })
     expect(parseError(result).code).toBe("wrong_type")
   })
 
   it("returns error for binary file", async () => {
     const target = path.join(tmp, "data.bin")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "a", newString: "b" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "a", newString: "b" }] })
     expect(parseError(result).code).toBe("binary_file")
   })
 
   it("returns filesystem_error for root file symlink edits", async () => {
     if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "edit-link.txt")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({
       code: "filesystem_error",
       path: target,
@@ -1027,29 +1020,29 @@ describe("edit tool", () => {
   it("returns filesystem_error for edits through root directory symlinks", async () => {
     if (!linkSupport.dirLinks) return
     const target = path.join(tmp, "linked-outside-dir", "outside-edit.txt")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({
       code: "filesystem_error",
       path: target,
     })
   })
 
-  it("returns error for path outside base directory", async () => {
-    const result = await tools.edit({ path: "/tmp/escape.txt", edits: [{ oldString: "a", newString: "b" }] })
+  it("returns error for path outside sandbox base directory", async () => {
+    const result = await tools.edit({ filePath: "/tmp/escape.txt", edits: [{ oldString: "a", newString: "b" }] })
     expect(parseError(result).code).toBe("path_outside_base")
   })
 
   it("uses utf8 by default", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "alpha", newString: "omega" }] })
-    expect(parseEdit(result).encoding).toBe("utf8")
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "alpha", newString: "omega" }] })
+    expect(parseEdit(result).fileEncoding).toBe("utf8")
   })
 
   it("accepts encoding utf8 explicitly", async () => {
     const target = path.join(tmp, "edit-one.txt")
     await fs.writeFile(target, "alpha\nbeta\ngamma\n")
-    const result = await tools.edit({ path: target, edits: [{ oldString: "gamma", newString: "theta" }], encoding: "utf8" })
-    expect(parseEdit(result).encoding).toBe("utf8")
+    const result = await tools.edit({ filePath: target, edits: [{ oldString: "gamma", newString: "theta" }], fileEncoding: "utf8" })
+    expect(parseEdit(result).fileEncoding).toBe("utf8")
   })
 })

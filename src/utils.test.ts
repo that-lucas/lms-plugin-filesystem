@@ -363,7 +363,7 @@ describe("formatTree", () => {
 })
 
 describe("walk error handling", () => {
-  it("fails closed when the base directory cannot be read", async () => {
-    await expect(walk(path.join(tmp, "missing-dir"), realTmp, { baseDir: tmp })).rejects.toThrow()
+  it("fails closed when the sandbox base directory cannot be read", async () => {
+    await expect(walk(path.join(tmp, "missing-dir"), realTmp, { sandboxBaseDir: tmp })).rejects.toThrow()
   })
 })
