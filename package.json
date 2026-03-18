@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "lms dev",
+    "install:local": "node scripts/install-local.js --yes",
     "push": "node scripts/push.js",
     "test": "vitest run"
   },

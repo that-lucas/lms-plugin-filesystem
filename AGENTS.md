@@ -18,8 +18,9 @@ Guidance for agents working in this repository.
 Run from the repository root.
 
 - `npm install` - install dependencies
-- `npm run dev` - start local LM Studio plugin development
 - `npm test` - run the test suite
+- `npm run dev` - start local LM Studio plugin development
+- `npm run install:local` - install plugin locally using a filtered temporary artifact
 - `npm run push` - publish a filtered runtime-only artifact with `lms push`
 - `npm run push -- --write-revision --description "..."` - publish the same filtered runtime-only artifact and update the Hub revision description when needed
 
