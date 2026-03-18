@@ -5,6 +5,7 @@ import { Minimatch } from "minimatch"
 
 export const READ_LIMIT = 500
 export const FILE_LIMIT = 100
+export const GREP_LIMIT = 50
 export const DEFAULT_IGNORES = [
   ".git",
   "node_modules",

@@ -33,7 +33,7 @@ const parseError = (output: string) => {
 
 const parseGrepSummary = (output: string) => {
   const fields = parseFlat(output)
-  return { total: fields.matches_total, files: fields.matches_files }
+  return { total: fields.total, files: fields.matches_files }
 }
 
 const PROJECT_DIR = path.resolve(__dirname, "..")

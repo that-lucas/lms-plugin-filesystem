@@ -97,9 +97,10 @@ function parseFlat(output) {
 
 function parseGrepOutput(output) {
   const { fields, payloads } = parseFlat(output)
-  const total = Number(fields.matches_total || 0)
+  const total = Number(fields.total || 0)
+  const count = Number(fields.limit || 0)
   const matches = []
-  for (let index = 0; index < total; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     matches.push({
       path: fields[`matches_${index}_path`],
       line: Number(fields[`matches_${index}_line`]),

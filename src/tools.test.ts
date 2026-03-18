@@ -117,8 +117,9 @@ const parseGlob = (output: string) => {
 
 const parseGrep = (output: string) => {
   const parsed = parseFlat(output)
-  const total = Number(parsed.fields.matches_total)
-  const matches = Array.from({ length: total }, (_, index) => ({
+  const total = Number(parsed.fields.total)
+  const count = Number(parsed.fields.limit)
+  const matches = Array.from({ length: count }, (_, index) => ({
     path: parsed.fields[`matches_${index}_path`],
     line: Number(parsed.fields[`matches_${index}_line`]),
     text: parsed.payloads[`matches_${index}_content`] || "",
@@ -126,7 +127,11 @@ const parseGrep = (output: string) => {
   return {
     path: parsed.fields.path,
     pattern: parsed.fields.pattern,
+    offset: Number(parsed.fields.offset),
+    limit: count,
     total,
+    hasMore: parsed.fields.has_more === "true",
+    nextOffset: parsed.fields.next_offset ? Number(parsed.fields.next_offset) : undefined,
     files: Number(parsed.fields.matches_files),
     matches,
   }
@@ -584,7 +589,11 @@ describe("grep tool", () => {
     expect(parseGrep(result)).toEqual({
       path: tmp,
       pattern: "foo",
+      offset: 1,
+      limit: 5,
       total: 5,
+      hasMore: false,
+      nextOffset: undefined,
       files: 2,
       matches: [
         { path: path.join(tmp, "multi-match.ts"), line: 1, text: "foo one" },
@@ -601,7 +610,11 @@ describe("grep tool", () => {
     expect(parseGrep(result)).toEqual({
       path: tmp,
       pattern: "baz",
+      offset: 1,
+      limit: 1,
       total: 1,
+      hasMore: false,
+      nextOffset: undefined,
       files: 1,
       matches: [{ path: path.join(tmp, "search-me.ts"), line: 2, text: 'const baz = "qux"' }],
     })
@@ -612,7 +625,11 @@ describe("grep tool", () => {
     expect(parseGrep(result)).toEqual({
       path: tmp,
       pattern: "hello",
+      offset: 1,
+      limit: 1,
       total: 1,
+      hasMore: false,
+      nextOffset: undefined,
       files: 1,
       matches: [{ path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' }],
     })
@@ -670,7 +687,11 @@ describe("grep tool", () => {
     expect(parseGrep(result)).toEqual({
       path: tmp,
       pattern: "zzzznotfound",
+      offset: 1,
+      limit: 0,
       total: 0,
+      hasMore: false,
+      nextOffset: undefined,
       files: 0,
       matches: [],
     })
@@ -704,6 +725,43 @@ describe("grep tool", () => {
       code: "filesystem_error",
       path: path.join(tmp, "linked-outside-dir"),
     })
+  })
+
+  it("paginates results with offset and limit", async () => {
+    const result = await tools.grep({ pattern: "foo", path: tmp, offset: 2, limit: 2 })
+    const parsed = parseGrep(result)
+    expect(parsed.offset).toBe(2)
+    expect(parsed.limit).toBe(2)
+    expect(parsed.total).toBe(5)
+    expect(parsed.hasMore).toBe(true)
+    expect(parsed.nextOffset).toBe(4)
+    expect(parsed.matches).toEqual([
+      { path: path.join(tmp, "multi-match.ts"), line: 2, text: "foo two" },
+      { path: path.join(tmp, "multi-match.ts"), line: 3, text: "foo three" },
+    ])
+  })
+
+  it("returns last page without next_offset", async () => {
+    const result = await tools.grep({ pattern: "foo", path: tmp, offset: 4, limit: 10 })
+    const parsed = parseGrep(result)
+    expect(parsed.offset).toBe(4)
+    expect(parsed.limit).toBe(2)
+    expect(parsed.total).toBe(5)
+    expect(parsed.hasMore).toBe(false)
+    expect(parsed.nextOffset).toBeUndefined()
+    expect(parsed.matches).toHaveLength(2)
+  })
+
+  it("returns out_of_range for offset beyond total", async () => {
+    const result = await tools.grep({ pattern: "foo", path: tmp, offset: 100 })
+    expect(parseError(result).code).toBe("out_of_range")
+  })
+
+  it("counts files only within the current page", async () => {
+    const page1 = await tools.grep({ pattern: "foo", path: tmp, limit: 3 })
+    expect(parseGrep(page1).files).toBe(1)
+    const page2 = await tools.grep({ pattern: "foo", path: tmp, offset: 4, limit: 3 })
+    expect(parseGrep(page2).files).toBe(1)
   })
 })
 

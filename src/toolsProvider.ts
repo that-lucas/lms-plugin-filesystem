@@ -16,7 +16,7 @@ import {
 import { configSchematics } from "./config"
 import { formatError, formatOutput, outputPayload } from "./errors"
 import { globWithRipgrep, grepWithRipgrep, isErrorResult } from "./ripgrep"
-import { FILE_LIMIT, READ_LIMIT, binary, formatTree, walk } from "./utils"
+import { FILE_LIMIT, GREP_LIMIT, READ_LIMIT, binary, formatTree, walk } from "./utils"
 
 type SandboxContext = {
   sandboxBaseDir: string
@@ -185,8 +185,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         path: z.string().describe("Required. Absolute or home-relative directory path to search from."),
         include: z.array(z.string()).optional().describe("Optional. File glob patterns limiting which files are searched, for example [\"*.ts\", \"*.js\"] or [\"src/**\"]."),
         exclude: z.array(z.string()).optional().describe("Optional. File glob patterns to leave out of the search, for example [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
+        offset: z.number().int().min(1).optional().describe("Optional. 1-indexed match number to start from. Default: 1."),
+        limit: z.number().int().min(1).optional().describe("Optional. Maximum number of matches to return. Default: 50."),
       },
-      implementation: async ({ pattern, path: input, include, exclude }) => {
+      implementation: async ({ pattern, path: input, include, exclude, offset, limit }) => {
         const sandboxContext = await resolveSandboxContext()
         const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, input)
         if (resolved.error || !resolved.path) return resolved.error!
@@ -203,14 +205,28 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           exclude,
         })
         if (isErrorResult(matches)) return matches
-        const fileCount = new Set(matches.map((match) => match.path)).size
+
+        const start = (offset ?? 1) - 1
+        const size = limit ?? GREP_LIMIT
+
+        if (matches.length < (offset ?? 1) && !(matches.length === 0 && (offset ?? 1) === 1)) {
+          return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", matches.length], ["unit", "matches"]])
+        }
+
+        const slice = matches.slice(start, start + size)
+        const fileCount = new Set(slice.map((match) => match.path)).size
+        const hasMore = start + slice.length < matches.length
         const out: Array<ReturnType<typeof outputPayload> | [string, string | number | boolean | undefined]> = [
           ["path", resolved.path],
           ["pattern", pattern],
-          ["matches_total", matches.length],
+          ["offset", offset ?? 1],
+          ["limit", slice.length],
+          ["total", matches.length],
+          ["has_more", hasMore],
+          ["next_offset", hasMore ? start + slice.length + 1 : undefined],
           ["matches_files", fileCount],
         ]
-        for (const [index, match] of matches.entries()) {
+        for (const [index, match] of slice.entries()) {
           out.push([`matches_${index}_path`, match.path])
           out.push([`matches_${index}_line`, match.line])
           out.push(outputPayload(`matches_${index}_content`, match.text))
