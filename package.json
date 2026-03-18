@@ -7,7 +7,11 @@
     "dev": "lms dev",
     "install:local": "node scripts/install-local.js --yes",
     "push": "node scripts/push.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e-read": "bash scripts/e2e-read.sh",
+    "e2e-list": "bash scripts/e2e-list.sh",
+    "e2e-glob": "bash scripts/e2e-glob.sh",
+    "e2e-grep": "bash scripts/e2e-grep.sh"
   },
   "author": "Lucas",
   "license": "MIT",
