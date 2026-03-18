@@ -70,7 +70,7 @@ const ripgrepGlobArgs = (cwd: string, defaults: string[]) => {
   const args: string[] = []
 
   for (const pattern of defaults) {
-    if (!pattern.includes("/") && !isGlobPattern(pattern)) {
+    if (!pattern.includes("/")) {
       args.push("--glob", `!**/${pattern}`)
       args.push("--glob", `!**/${pattern}/**`)
       continue

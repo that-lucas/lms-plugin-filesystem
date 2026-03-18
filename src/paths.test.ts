@@ -6,19 +6,21 @@ import { toolsProvider } from "./toolsProvider"
 
 const parseFlat = (output: string) => {
   const fields: Record<string, string> = {}
+  const buf = Buffer.from(output, "utf8")
   let index = 0
-  while (index < output.length) {
-    if (output[index] !== "#") throw new Error("Invalid flat output")
-    const newline = output.indexOf("\n", index)
-    const line = newline === -1 ? output.slice(index) : output.slice(index, newline)
+  while (index < buf.length) {
+    if (buf[index] !== 0x23) throw new Error("Invalid flat output")
+    const newline = buf.indexOf(0x0a, index)
+    const lineEnd = newline === -1 ? buf.length : newline
+    const line = buf.slice(index, lineEnd).toString("utf8")
     const separator = line.indexOf(":")
     if (separator === -1) throw new Error("Invalid field")
     const key = line.slice(1, separator)
     const value = line.slice(separator + 1)
-    index = newline === -1 ? output.length : newline + 1
+    index = newline === -1 ? buf.length : newline + 1
     if (key.endsWith("_bytes")) {
       index += Number(value)
-      if (index < output.length && output[index] === "\n") index += 1
+      if (index < buf.length && buf[index] === 0x0a) index += 1
       continue
     }
     fields[key] = value
