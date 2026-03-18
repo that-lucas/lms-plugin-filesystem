@@ -271,7 +271,7 @@ describe("read tool", () => {
     const result = await tools.read({ filePath: path.join(tmp, "src") })
     expect(parseError(result)).toMatchObject({
       code: "wrong_type",
-      message: "Path is a directory",
+      message: "Path is not a file",
       path: path.join(tmp, "src"),
       expected: "file",
       actual: "directory",

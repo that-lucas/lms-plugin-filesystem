@@ -46,12 +46,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }
 
     if (result.kind === "wrong_type") {
-      if (expected === "file" && result.actual === "directory") {
-        return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", result.resolvedPath]])
-      }
       return formatError(
         "wrong_type",
-        "Path is not a directory",
+        `Path is not a ${expected}`,
         [["expected", expected], ["actual", result.actual ?? "other"], ["path", result.resolvedPath]],
       )
     }

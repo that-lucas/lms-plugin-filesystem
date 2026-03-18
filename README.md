@@ -50,6 +50,6 @@ If `LMS_FILESYSTEM_IGNORE_PATHS` is set, it replaces the built-in list entirely.
 
 ## Notes
 
-Root input paths that are symbolic links are treated as not found. Nested symbolic links are ignored during traversal and search.
+Root input paths that resolve to symbolic links fail with `filesystem_error`. Nested symbolic links are ignored during traversal and search.
 
 The detailed tool definitions and parameter docs are exposed directly to LM Studio through the tool schemas.
