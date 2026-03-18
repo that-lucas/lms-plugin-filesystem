@@ -1,4 +1,7 @@
 import * as fs from "node:fs/promises"
+import type { PathLike } from "node:fs"
+import path from "node:path"
+import { setBoundaryRealpathForTests } from "./boundary"
 
 export type LinkSupport = {
   fileSymlinks: boolean
@@ -8,6 +11,33 @@ export type LinkSupport = {
 export const createLink = async (target: string, linkPath: string, type: "file" | "dir" = "file") => {
   const linkType = process.platform === "win32" && type === "dir" ? "junction" : type
   await fs.symlink(target, linkPath, linkType)
+}
+
+export const createBrokenFileLink = async (target: string, linkPath: string) => {
+  await createLink(target, linkPath, "file")
+}
+
+export const createBrokenDirLink = async (target: string, linkPath: string) => {
+  await createLink(target, linkPath, "dir")
+}
+
+export const createSymlinkLoopPair = async (first: string, second: string, type: "file" | "dir" = "dir") => {
+  await createLink(second, first, type)
+  await createLink(first, second, type)
+}
+
+export const mockRealpathFailure = (target: string, error: NodeJS.ErrnoException) => {
+  const original = (filePath: PathLike) => fs.realpath(filePath, "utf8")
+  setBoundaryRealpathForTests((async (filePath: PathLike) => {
+    const normalized = typeof filePath === "string" ? filePath : filePath.toString()
+    if (path.resolve(normalized) === path.resolve(target)) throw error
+    return await original(normalized)
+  }) as typeof fs.realpath)
+  return {
+    mockRestore() {
+      setBoundaryRealpathForTests()
+    },
+  }
 }
 
 export const detectLinkSupport = async (tmpDir: string) => {

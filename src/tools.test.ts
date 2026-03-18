@@ -286,20 +286,20 @@ describe("read tool", () => {
     })
   })
 
-  it("treats root file symlinks as not found", async () => {
+  it("returns filesystem_error for root file symlink reads", async () => {
     if (!linkSupport.fileSymlinks) return
     const result = await tools.read({ filePath: path.join(tmp, "read-link.txt") })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: path.join(tmp, "read-link.txt"),
     })
   })
 
-  it("treats file paths through root directory symlinks as not found", async () => {
+  it("returns filesystem_error for file reads through root directory symlinks", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.read({ filePath: path.join(tmp, "linked-outside-dir", "outside-read.txt") })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: path.join(tmp, "linked-outside-dir", "outside-read.txt"),
     })
   })
@@ -467,11 +467,11 @@ describe("list tool", () => {
     ])
   })
 
-  it("treats root directory symlinks as not found", async () => {
+  it("returns filesystem_error for root directory symlink list roots", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.list({ path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: path.join(tmp, "linked-outside-dir"),
     })
   })
@@ -516,18 +516,15 @@ describe("glob tool", () => {
     ])
   })
 
-  // ripgrep's --glob treats "*.ts" as matching at any depth, unlike Minimatch
-  // where "*.ts" only matches entries directly under the search root. The glob
-  // tool intentionally adopts ripgrep's semantics here.
-  it("uses ripgrep file glob semantics without root-only matching", async () => {
+  it("matches basename file patterns at any depth", async () => {
     const result = await tools.glob({ pattern: "*.ts", path: tmp })
     expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"), // matched by pattern *.ts (rg matches at any depth)
-      path.join(tmp, "src", "index.ts"), // matched by pattern *.ts (rg matches at any depth)
-      path.join(tmp, "src", "existing.ts"), // matched by pattern *.ts (rg matches at any depth)
-      path.join(tmp, "src", "utils.ts"), // matched by pattern *.ts (rg matches at any depth)
-      path.join(tmp, "src", "lib", "helper.ts"), // matched by pattern *.ts (rg matches at any depth)
-      path.join(tmp, "search-me.ts"), // matched by pattern *.ts (rg matches at any depth)
+      path.join(tmp, "multi-match.ts"),
+      path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "existing.ts"),
+      path.join(tmp, "src", "utils.ts"),
+      path.join(tmp, "src", "lib", "helper.ts"),
+      path.join(tmp, "search-me.ts"),
     ])
   })
 
@@ -536,15 +533,15 @@ describe("glob tool", () => {
     expect(parseGlob(result).entries).toEqual([])
   })
 
-  it("passes include and exclude globs directly to rg for file matching", async () => {
+  it("applies include and exclude file filters to glob results", async () => {
     const result = await tools.glob({ pattern: "**/*.ts", path: tmp, include: ["**/src/**"], exclude: ["src/lib/**"] })
     expect(parseGlob(result).entries).toEqual([
-      path.join(tmp, "multi-match.ts"), // matched by pattern **/*.ts
-      path.join(tmp, "src", "index.ts"), // matched by pattern **/*.ts + include **/src/**
-      path.join(tmp, "src", "MixedCase.TS"), // matched by include **/src/** (not by pattern — rg glob is case-sensitive)
-      path.join(tmp, "src", "existing.ts"), // matched by pattern **/*.ts + include **/src/**
-      path.join(tmp, "src", "utils.ts"), // matched by pattern **/*.ts + include **/src/**
-      path.join(tmp, "search-me.ts"), // matched by pattern **/*.ts
+      path.join(tmp, "multi-match.ts"),
+      path.join(tmp, "src", "index.ts"),
+      path.join(tmp, "src", "MixedCase.TS"),
+      path.join(tmp, "src", "existing.ts"),
+      path.join(tmp, "src", "utils.ts"),
+      path.join(tmp, "search-me.ts"),
     ])
   })
 
@@ -578,11 +575,11 @@ describe("glob tool", () => {
     expect(parseError(result).code).toBe("not_found")
   })
 
-  it("treats root directory symlinks as not found", async () => {
+  it("returns filesystem_error for root directory symlink glob roots", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.glob({ pattern: "*", path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: path.join(tmp, "linked-outside-dir"),
     })
   })
@@ -628,8 +625,7 @@ describe("grep tool", () => {
     })
   })
 
-  it("respects include filter with ripgrep glob semantics", async () => {
-    // ripgrep --glob is case-sensitive, so "**/*.ts" does not match "MixedCase.TS"
+  it("applies case-sensitive include filters", async () => {
     const result = await tools.grep({ pattern: "export", path: tmp, include: ["**/*.ts"] })
     expect(parseGrep(result).matches).toEqual([
       { path: path.join(tmp, "src", "index.ts"), line: 1, text: 'export const main = () => "hello"' },
@@ -708,11 +704,11 @@ describe("grep tool", () => {
     expect(parseError(result).code).toBe("not_found")
   })
 
-  it("treats root directory symlinks as not found", async () => {
+  it("returns filesystem_error for root directory symlink grep roots", async () => {
     if (!linkSupport.dirLinks) return
     const result = await tools.grep({ pattern: "test", path: path.join(tmp, "linked-outside-dir") })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: path.join(tmp, "linked-outside-dir"),
     })
   })
@@ -797,22 +793,22 @@ describe("create tool", () => {
     })
   })
 
-  it("treats root file symlink targets as not found", async () => {
+  it("returns filesystem_error for root file symlink create targets", async () => {
     if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "write-link.txt")
     const result = await tools.create({ type: "file", path: target, content: "new", overwrite: true })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: target,
     })
   })
 
-  it("returns error when file parent resolves outside base through a symlink", async () => {
+  it("returns filesystem_error when file creation crosses a symlinked parent", async () => {
     if (!linkSupport.dirLinks) return
     const target = path.join(tmp, "linked-outside-dir", "new.txt")
     const result = await tools.create({ type: "file", path: target, content: "new" })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: target,
     })
   })
@@ -1018,22 +1014,22 @@ describe("edit tool", () => {
     expect(parseError(result).code).toBe("binary_file")
   })
 
-  it("treats root file symlinks as not found", async () => {
+  it("returns filesystem_error for root file symlink edits", async () => {
     if (!linkSupport.fileSymlinks) return
     const target = path.join(tmp, "edit-link.txt")
     const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: target,
     })
   })
 
-  it("treats file paths through root directory symlinks as not found", async () => {
+  it("returns filesystem_error for edits through root directory symlinks", async () => {
     if (!linkSupport.dirLinks) return
     const target = path.join(tmp, "linked-outside-dir", "outside-edit.txt")
     const result = await tools.edit({ path: target, edits: [{ oldString: "outside", newString: "inside" }] })
     expect(parseError(result)).toMatchObject({
-      code: "not_found",
+      code: "filesystem_error",
       path: target,
     })
   })

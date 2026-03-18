@@ -95,16 +95,6 @@ export class PathOutsideBaseError extends Error {
   }
 }
 
-export class PathNotFoundError extends Error {
-  filePath: string
-
-  constructor(filePath: string) {
-    super(`Path not found: ${filePath}`)
-    this.name = "PathNotFoundError"
-    this.filePath = filePath
-  }
-}
-
 export const expandHome = (input: string) => {
   if (input === "~") return os.homedir()
   if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2))
@@ -159,27 +149,9 @@ export const withinBase = (base: string, target: string) => {
   return rel === "" || (!(rel === ".." || rel.startsWith(`..${path.sep}`)) && !path.isAbsolute(rel))
 }
 
-export const strictRealpath = async (target: string) => {
-  try {
-    return await fs.realpath(target)
-  } catch {
-    throw new PathNotFoundError(target)
-  }
-}
+export const walk = async (base: string, realBase: string, opts?: WalkOptions) => {
+  const { inspectTraversalRoot, inspectNestedEntry } = await import("./boundary")
 
-export const assertNoSymlinkPath = async (base: string, target: string) => {
-  let current = target
-  while (withinBase(base, current)) {
-    const stat = await fs.lstat(current).catch(() => undefined)
-    if (stat?.isSymbolicLink()) throw new PathNotFoundError(target)
-    if (current === base) return
-    const parent = path.dirname(current)
-    if (parent === current) return
-    current = parent
-  }
-}
-
-export const walk = async (base: string, opts?: WalkOptions) => {
   const out: Item[] = []
   const skip = compile(opts?.ignore)
   const include = compile(opts?.include)
@@ -188,43 +160,39 @@ export const walk = async (base: string, opts?: WalkOptions) => {
   const defaultMatchers = compile(defaults)
   const recursive = opts?.recursive ?? true
   const type = opts?.type ?? "all"
-  const sandboxBase = opts?.baseDir
-  const baseStat = await fs.lstat(base).catch(() => undefined)
-  if (!baseStat) throw new PathNotFoundError(base)
-  await assertNoSymlinkPath(opts?.baseDir ?? base, base)
-  const realSandboxBase = sandboxBase ? await strictRealpath(sandboxBase) : undefined
-
-  const assertWithinSandbox = async (target: string) => {
-    if (!realSandboxBase) return
-    const realTarget = await strictRealpath(target)
-    if (!withinBase(realSandboxBase, realTarget)) throw new PathOutsideBaseError(target)
+  const sandboxBase = opts?.baseDir ?? base
+  const rootCheck = await inspectTraversalRoot(sandboxBase, base)
+  if (!rootCheck.ok) {
+    throw new Error(rootCheck.details ?? rootCheck.kind)
   }
 
   const visit = async (dir: string) => {
-    await assertWithinSandbox(dir)
     if (blocked(dir, base)) return
     const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
     items.sort((a, b) => a.name.localeCompare(b.name))
+
     for (const item of items) {
       const full = path.join(dir, item.name)
-      const linkStat = await fs.lstat(full).catch(() => undefined)
-      if (!linkStat || linkStat.isSymbolicLink()) continue
+      const nested = await inspectNestedEntry(realBase, full, "any")
+      if (!nested.ok || !nested.stat) continue
       if (blocked(full, base)) continue
+
       const rel = relPath(base, full)
       if (ignored(rel, skip, defaults, defaultMatchers)) continue
       if (matchesPattern(rel, exclude)) continue
-      if (item.isDirectory()) {
+
+      if (nested.stat.isDirectory()) {
         if (type !== "files" && (include.length === 0 || matchesPattern(rel, include))) out.push({ path: full, dir: true })
         if (recursive) await visit(full)
         continue
       }
-      if (!linkStat.isFile()) continue
+
+      if (!nested.stat.isFile()) continue
       if (include.length > 0 && !matchesPattern(rel, include)) continue
       if (type !== "directories") out.push({ path: full, dir: false })
     }
   }
 
-  await assertWithinSandbox(base)
   await visit(base)
   return out
 }

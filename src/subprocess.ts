@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import { constants as fsConstants } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
-import { assertNoSymlinkPath, PathNotFoundError, resolvePath, strictRealpath, withinBase } from "./utils"
+import { inspectTraversalRoot, resolveConfiguredBaseDir, resolveUserPath } from "./boundary"
 
 export const DEFAULT_SUBPROCESS_TIMEOUT_MS = 10_000
 export const DEFAULT_SUBPROCESS_MAX_OUTPUT_BYTES = 256 * 1024
@@ -65,21 +65,31 @@ export async function resolveExecutable(command: string, envPath = process.env.P
 }
 
 const resolveSubprocessCwd = async (baseDir: string, cwd?: string) => {
-  const resolved = resolvePath(baseDir, cwd)
-  await assertNoSymlinkPath(baseDir, resolved)
-  const linkStat = await fs.lstat(resolved).catch(() => undefined)
-  if (!linkStat || linkStat.isSymbolicLink()) throw new PathNotFoundError(resolved)
-  const stat = await fs.stat(resolved).catch(() => undefined)
-  if (!stat) throw new Error(`Working directory not found: ${resolved}`)
-  if (!stat.isDirectory()) throw new Error(`Working directory is not a directory: ${resolved}`)
-
-  const realBase = await strictRealpath(baseDir)
-  const realCwd = await strictRealpath(resolved)
-  if (!withinBase(realBase, realCwd)) {
-    throw new Error(`Working directory is outside the configured base directory: ${resolved}`)
+  const base = await resolveConfiguredBaseDir(baseDir)
+  if (!base.ok) {
+    throw new Error(`Working directory validation failed: ${base.details ?? base.resolvedPath}`)
   }
 
-  return realCwd
+  const resolved = resolveUserPath(base.resolvedPath, cwd)
+  if (!resolved.ok) {
+    throw new Error(`Working directory is outside the configured base directory: ${resolved.resolvedPath}`)
+  }
+
+  const inspected = await inspectTraversalRoot(base.resolvedPath, resolved.resolvedPath)
+  if (!inspected.ok) {
+    if (inspected.kind === "outside_base") {
+      throw new Error(`Working directory is outside the configured base directory: ${inspected.resolvedPath}`)
+    }
+    if (inspected.kind === "not_found") {
+      throw new Error(`Working directory not found: ${inspected.resolvedPath}`)
+    }
+    if (inspected.kind === "wrong_type") {
+      throw new Error(`Working directory is not a directory: ${inspected.resolvedPath}`)
+    }
+    throw new Error(`Working directory validation failed: ${inspected.details ?? inspected.resolvedPath}`)
+  }
+
+  return inspected.realPath ?? inspected.resolvedPath
 }
 
 export async function runSubprocess({

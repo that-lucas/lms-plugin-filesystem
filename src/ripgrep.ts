@@ -1,12 +1,11 @@
-import * as fs from "node:fs/promises"
 import path from "node:path"
+import { inspectNestedEntry } from "./boundary"
 import { formatError } from "./errors"
 import { DEFAULT_EXECUTABLE_DIRS, resolveExecutable, runSubprocess, type RunSubprocessResult } from "./subprocess"
 import { blocked, defaultIgnoreList, SYSTEM_IGNORES } from "./utils"
 
 export const RIPGREP_TIMEOUT_MS = 60_000
 export const RIPGREP_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-const RIPGREP_STAT_BATCH_SIZE = 32
 
 type TextValue = {
   text?: string
@@ -30,6 +29,7 @@ export type RipgrepMatch = {
 
 type RipgrepGlobOptions = {
   baseDir: string
+  realBase: string
   dir: string
   pattern: string
   include?: string[]
@@ -130,7 +130,7 @@ async function runRipgrep(baseDir: string, cwd: string, args: string[]): Promise
 
 const sortEntries = (items: GlobEntry[]) => items.sort((a, b) => b.time - a.time)
 
-const collectFileEntries = async (baseDir: string, dir: string, pattern: string, include?: string[], exclude?: string[]) => {
+const collectFileEntries = async (baseDir: string, realBase: string, dir: string, pattern: string, include?: string[], exclude?: string[]) => {
   const defaults = defaultIgnoreList()
   const userGlobs = [
     "--glob",
@@ -158,29 +158,26 @@ const collectFileEntries = async (baseDir: string, dir: string, pattern: string,
     .filter((filePath) => filePath.length > 0)
 
   const out: GlobEntry[] = []
-  for (let index = 0; index < paths.length; index += RIPGREP_STAT_BATCH_SIZE) {
-    const batch = paths.slice(index, index + RIPGREP_STAT_BATCH_SIZE)
-    const entries = await Promise.all(
-      batch.map(async (filePath) => {
-        const fullPath = normalizeRipgrepPath(dir, filePath)
-        const stat = await fs.lstat(fullPath).catch(() => undefined)
-        if (!stat || stat.isSymbolicLink() || !stat.isFile()) return undefined
-        return { path: fullPath, time: stat.mtime.getTime() }
-      }),
-    )
-    out.push(...entries.filter((entry): entry is GlobEntry => entry !== undefined))
-  }
+  const inspected = await Promise.all(paths.map(async (filePath) => {
+    const fullPath = normalizeRipgrepPath(dir, filePath)
+    const nested = await inspectNestedEntry(realBase, fullPath, "file")
+    if (!nested.ok || !nested.stat?.isFile()) return undefined
+    return { path: fullPath, time: nested.stat.mtime.getTime() }
+  }))
+  out.push(...inspected.filter((entry): entry is GlobEntry => entry !== undefined))
   return out
 }
 
 export async function grepWithRipgrep({
   baseDir,
+  realBase,
   dir,
   pattern,
   include,
   exclude,
 }: {
   baseDir: string
+  realBase: string
   dir: string
   pattern: string
   include?: string[]
@@ -218,6 +215,7 @@ export async function grepWithRipgrep({
   if (result.exitCode !== 0 && result.exitCode !== 1) return ripgrepError(result.stderr || `ripgrep exited with code ${result.exitCode}`)
 
   const matches: RipgrepMatch[] = []
+  const visibility = new Map<string, boolean>()
 
   for (const rawLine of result.stdout.split(/\r?\n/)) {
     if (rawLine.length === 0) continue
@@ -232,6 +230,12 @@ export async function grepWithRipgrep({
     if (event.type !== "match") continue
 
     const filePath = normalizeRipgrepPath(dir, decodeText(event.data?.path))
+    let visible = visibility.get(filePath)
+    if (visible === undefined) {
+      visible = (await inspectNestedEntry(realBase, filePath, "file")).ok
+      visibility.set(filePath, visible)
+    }
+    if (!visible) continue
 
     matches.push({
       path: filePath,
@@ -245,13 +249,14 @@ export async function grepWithRipgrep({
 
 export async function globWithRipgrep({
   baseDir,
+  realBase,
   dir,
   pattern,
   include,
   exclude,
 }: RipgrepGlobOptions): Promise<string[] | string> {
   if (blocked(dir, baseDir)) return []
-  const files = await collectFileEntries(baseDir, dir, pattern, include, exclude)
+  const files = await collectFileEntries(baseDir, realBase, dir, pattern, include, exclude)
   if (isErrorResult(files)) return files
   return sortEntries(files).map((entry) => entry.path)
 }

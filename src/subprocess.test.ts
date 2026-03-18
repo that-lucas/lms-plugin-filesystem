@@ -135,7 +135,7 @@ describe("runSubprocess", () => {
     expect(result.stdout).toBe(realSubdir)
   })
 
-  it("treats root symlink cwd values as not found", async () => {
+  it("fails validation for root symlink cwd values", async () => {
     if (!linkSupport.dirLinks) return
     await expect(
       runSubprocess({
@@ -144,10 +144,10 @@ describe("runSubprocess", () => {
         baseDir,
         cwd: "inside-link",
       }),
-    ).rejects.toThrow("Path not found")
+    ).rejects.toThrow("Working directory validation failed")
   })
 
-  it("treats root symlink cwd values outside the base as not found", async () => {
+  it("fails validation for root symlink cwd values outside the base", async () => {
     if (!linkSupport.dirLinks) return
     await expect(
       runSubprocess({
@@ -156,7 +156,7 @@ describe("runSubprocess", () => {
         baseDir,
         cwd: "outside-link",
       }),
-    ).rejects.toThrow("Path not found")
+    ).rejects.toThrow("Working directory validation failed")
   })
 
   it("times out long-running subprocesses", async () => {

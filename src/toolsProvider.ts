@@ -1,150 +1,68 @@
 import { tool, Tool, ToolsProviderController } from "@lmstudio/sdk"
-import { createReadStream, existsSync, type Stats } from "node:fs"
+import { createReadStream } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
-import { configSchematics } from "./config"
-import { formatError, formatOutput, isErrorOutput, outputPayload } from "./errors"
-import { globWithRipgrep, grepWithRipgrep, isErrorResult } from "./ripgrep"
 import {
-  READ_LIMIT,
-  FILE_LIMIT,
-  assertNoSymlinkPath,
-  PathNotFoundError,
-  PathOutsideBaseError,
-  expandHome,
-  resolvePath,
-  strictRealpath,
-  walk,
-  binary,
-  formatTree,
-  withinBase,
-} from "./utils"
+  type BoundaryExpectedKind,
+  type BoundaryFailure,
+  inspectCreateTarget,
+  inspectExistingPath,
+  inspectTraversalRoot,
+  resolveConfiguredBaseDir,
+  resolveUserPath,
+} from "./boundary"
+import { configSchematics } from "./config"
+import { formatError, formatOutput, outputPayload } from "./errors"
+import { globWithRipgrep, grepWithRipgrep, isErrorResult } from "./ripgrep"
+import { FILE_LIMIT, READ_LIMIT, binary, formatTree, walk } from "./utils"
+
+type BaseContext = {
+  base: string
+  realBase: string
+}
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const tools: Tool[] = []
 
-  const baseDir = () => {
-    const dir = ctl.getPluginConfig(configSchematics).get("baseDir")?.trim()
-    const full = path.resolve(expandHome(dir || "~"))
-    if (!existsSync(full)) throw new Error(formatError("filesystem_error", "Base directory does not exist", [["path", full]]))
-    return full
+  const resolveBaseContext = async (): Promise<BaseContext> => {
+    const configured = ctl.getPluginConfig(configSchematics).get("baseDir")
+    const result = await resolveConfiguredBaseDir(configured)
+    if (!result.ok) {
+      throw new Error(formatError("filesystem_error", "Filesystem operation failed", [["path", result.resolvedPath], ["details", result.details]]))
+    }
+    return { base: result.resolvedPath, realBase: result.realBase }
   }
 
-  const resolveInputPath = (base: string, input?: string) => {
-    try {
-      return input && path.isAbsolute(input) ? resolvePath(base, path.relative(base, input)) : resolvePath(base, input)
-    } catch (error) {
-      if (error instanceof PathOutsideBaseError) {
-        return formatError("path_outside_base", "Path is outside the configured base directory", [["path", error.filePath]])
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return formatError("filesystem_error", "Filesystem operation failed", [["details", message]])
+  const formatBoundaryFailure = (result: BoundaryFailure, expected: BoundaryExpectedKind) => {
+    if (result.kind === "outside_base") {
+      return formatError("path_outside_base", "Path is outside the configured base directory", [["path", result.resolvedPath]])
     }
+
+    if (result.kind === "not_found") {
+      const kind = expected === "directory" ? "directory" : "file"
+      return formatError("not_found", kind === "directory" ? "Directory not found" : "File not found", [["kind", kind], ["path", result.resolvedPath]])
+    }
+
+    if (result.kind === "wrong_type") {
+      if (expected === "file" && result.actual === "directory") {
+        return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", result.resolvedPath]])
+      }
+      return formatError(
+        "wrong_type",
+        "Path is not a directory",
+        [["expected", expected], ["actual", result.actual ?? "other"], ["path", result.resolvedPath]],
+      )
+    }
+
+    return formatError("filesystem_error", "Filesystem operation failed", [["path", result.resolvedPath], ["details", result.details]])
   }
 
-  const ensureExistingPathIsSafe = async (base: string, target: string, expected: "file" | "directory"): Promise<{ stat?: Stats; error?: string }> => {
-    try {
-      await assertNoSymlinkPath(base, target)
-    } catch (error) {
-      if (error instanceof PathNotFoundError) {
-        return { error: formatError("not_found", expected === "file" ? "File not found" : "Directory not found", [["kind", expected], ["path", target]]) }
-      }
-      throw error
-    }
-    const stat = await fs.lstat(target).catch(() => undefined)
-    if (stat?.isSymbolicLink()) {
-      return { error: formatError("not_found", expected === "file" ? "File not found" : "Directory not found", [["kind", expected], ["path", target]]) }
-    }
-    if (stat) {
-      try {
-        const realBase = await strictRealpath(base)
-        const realTarget = await strictRealpath(target)
-        if (!withinBase(realBase, realTarget)) {
-          return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
-        }
-      } catch (error) {
-        if (error instanceof PathNotFoundError) {
-          return { error: formatError("not_found", expected === "file" ? "File not found" : "Directory not found", [["kind", expected], ["path", target]]) }
-        }
-        throw error
-      }
-    }
-    return { stat }
-  }
-
-  const ensureCanonicalBase = async (base: string) => {
-    try {
-      return await strictRealpath(base)
-    } catch (error) {
-      if (error instanceof PathNotFoundError) {
-        throw new Error(`Base directory not found: ${base}`)
-      }
-      throw error
-    }
-  }
-
-  const ensureParentWithinBase = async (base: string, target: string) => {
-    const realBase = await ensureCanonicalBase(base)
-    let current = path.dirname(target)
-    while (true) {
-      const stat = await fs.lstat(current).catch(() => undefined)
-      if (stat) {
-        if (stat.isSymbolicLink()) {
-          return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
-        }
-        const realCurrent = await strictRealpath(current)
-        if (!withinBase(realBase, realCurrent)) {
-          return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
-        }
-        return undefined
-      }
-      const parent = path.dirname(current)
-      if (parent === current) return undefined
-      current = parent
-    }
-  }
-
-  const ensureDirectoryWithinBase = async (base: string, target: string): Promise<{ stat?: Stats; error?: string }> => {
-    try {
-      await assertNoSymlinkPath(base, target)
-    } catch (error) {
-      if (error instanceof PathNotFoundError) {
-        return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
-      }
-      throw error
-    }
-    const linkStat = await fs.lstat(target).catch(() => undefined)
-    if (!linkStat) return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
-    if (linkStat.isSymbolicLink()) {
-      return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
-    }
-
-    let realBase: string
-    let realTarget: string
-    try {
-      realBase = await ensureCanonicalBase(base)
-      realTarget = await strictRealpath(target)
-    } catch (error) {
-      if (error instanceof PathNotFoundError) {
-        return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
-      }
-      throw error
-    }
-    if (!withinBase(realBase, realTarget)) {
-      return { error: formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]]) }
-    }
-
-    const stat = await fs.stat(realTarget).catch(() => undefined)
-    if (!stat) return { error: formatError("not_found", "Directory not found", [["kind", "directory"], ["path", target]]) }
-    if (!stat.isDirectory()) {
-      return {
-        error: formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", target]]),
-      }
-    }
-
-    return { stat }
+  const resolveToolPath = (base: string, input?: string) => {
+    const result = resolveUserPath(base, input)
+    if (!result.ok) return { error: formatBoundaryFailure(result, "any"), path: undefined as string | undefined }
+    return { path: result.resolvedPath, error: undefined as string | undefined }
   }
 
   tools.push(
@@ -157,21 +75,20 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         limit: z.number().int().min(1).optional().describe("The maximum number of lines to return. Default: 2000."),
       },
       implementation: async ({ filePath, offset, limit }) => {
-        const base = baseDir()
-        const file = resolveInputPath(base, filePath)
-        if (isErrorOutput(file)) return file
-        const { stat, error } = await ensureExistingPathIsSafe(base, file, "file")
-        if (error) return error
-        if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
-        if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
-        if (await binary(file)) return formatError("binary_file", "Cannot read binary file", [["path", file]])
+        const baseContext = await resolveBaseContext()
+        const resolved = resolveToolPath(baseContext.base, filePath)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectExistingPath(baseContext.base, resolved.path, "file")
+        if (!checked.ok) return formatBoundaryFailure(checked, "file")
+        if (await binary(resolved.path)) return formatError("binary_file", "Cannot read binary file", [["path", resolved.path]])
 
         const size = limit || READ_LIMIT
         const start = (offset || 1) - 1
         const raw: string[] = []
         let total = 0
         let truncated = false
-        const stream = createReadStream(file, { encoding: "utf8" })
+        const stream = createReadStream(resolved.path, { encoding: "utf8" })
         const rl = createInterface({ input: stream, crlfDelay: Infinity })
         try {
           for await (const text of rl) {
@@ -197,7 +114,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const hasMore = truncated
         const next = startOffset + raw.length
         return formatOutput([
-          ["path", file],
+          ["path", resolved.path],
           ["type", "file"],
           ["offset", startOffset],
           ["limit", raw.length],
@@ -223,40 +140,41 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("The maximum number of entries to return in one call. Default: 100."),
       },
       implementation: async ({ path: input, ignore, recursive, type, offset, limit }) => {
-        const base = baseDir()
-        const dir = resolveInputPath(base, input)
-        if (isErrorOutput(dir)) return dir
-        const checked = await ensureDirectoryWithinBase(base, dir)
-        if (checked.error) return checked.error
+        const baseContext = await resolveBaseContext()
+        const resolved = resolveToolPath(baseContext.base, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectTraversalRoot(baseContext.base, resolved.path)
+        if (!checked.ok) return formatBoundaryFailure(checked, "directory")
+
         const deep = recursive ?? false
         const kind = type ?? "all"
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
+
         let found
         try {
-          found = await walk(dir, { ignore, recursive: deep, type: kind, baseDir: base })
+          found = await walk(resolved.path, baseContext.realBase, { ignore, recursive: deep, type: kind, baseDir: baseContext.base })
         } catch (error) {
-          if (error instanceof PathOutsideBaseError) {
-            return formatError("path_outside_base", "Path is outside the configured base directory", [["path", error.filePath]])
-          }
           const message = error instanceof Error ? error.message : String(error)
-          return formatError("filesystem_error", "Filesystem operation failed", [["details", message]])
+          return formatError("filesystem_error", "Filesystem operation failed", [["path", resolved.path], ["details", message]])
         }
+
         const slice = found.slice(start, start + size)
         const out = !deep
           ? [
-              `${dir}/`,
+              `${resolved.path}/`,
               ...slice
                 .sort((a, b) => a.path.localeCompare(b.path))
                 .map((item) => `  ${path.basename(item.path)}${item.dir ? "/" : ""}`),
             ].join("\n")
-          : formatTree(dir, slice)
+          : formatTree(resolved.path, slice)
         if (found.length < (offset ?? 1) && !(found.length === 0 && (offset ?? 1) === 1)) {
           return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", found.length], ["unit", "entries"]])
         }
         const hasMore = start + slice.length < found.length
         return formatOutput([
-          ["path", dir],
+          ["path", resolved.path],
           ["type", "directory"],
           ["offset", offset ?? 1],
           ["limit", slice.length],
@@ -282,23 +200,33 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("The maximum number of matches to return in one call. Default: 100."),
       },
       implementation: async ({ pattern, path: input, include, exclude, offset, limit }) => {
-        const base = baseDir()
-        const dir = resolveInputPath(base, input)
-        if (isErrorOutput(dir)) return dir
-        const checked = await ensureDirectoryWithinBase(base, dir)
-        if (checked.error) return checked.error
+        const baseContext = await resolveBaseContext()
+        const resolved = resolveToolPath(baseContext.base, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectTraversalRoot(baseContext.base, resolved.path)
+        if (!checked.ok) return formatBoundaryFailure(checked, "directory")
+
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
-        const files = await globWithRipgrep({ baseDir: base, dir, pattern, include, exclude })
+        const files = await globWithRipgrep({
+          baseDir: baseContext.base,
+          realBase: baseContext.realBase,
+          dir: resolved.path,
+          pattern,
+          include,
+          exclude,
+        })
         if (isErrorResult(files)) return files
         if (files.length < (offset ?? 1) && !(files.length === 0 && (offset ?? 1) === 1)) {
           return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", files.length], ["unit", "entries"]])
         }
+
         const slice = files.slice(start, start + size)
         const lines = slice.join("\n")
         const hasMore = start + slice.length < files.length
         return formatOutput([
-          ["path", dir],
+          ["path", resolved.path],
           ["type", "files"],
           ["pattern", pattern],
           ["offset", offset ?? 1],
@@ -324,16 +252,25 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         exclude: z.array(z.string()).optional().describe("Glob patterns to leave out of the search, such as [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
       },
       implementation: async ({ pattern, path: input, include, exclude }) => {
-        const base = baseDir()
-        const dir = resolveInputPath(base, input)
-        if (isErrorOutput(dir)) return dir
-        const checked = await ensureDirectoryWithinBase(base, dir)
-        if (checked.error) return checked.error
-        const matches = await grepWithRipgrep({ baseDir: base, dir, pattern, include, exclude })
+        const baseContext = await resolveBaseContext()
+        const resolved = resolveToolPath(baseContext.base, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectTraversalRoot(baseContext.base, resolved.path)
+        if (!checked.ok) return formatBoundaryFailure(checked, "directory")
+
+        const matches = await grepWithRipgrep({
+          baseDir: baseContext.base,
+          realBase: baseContext.realBase,
+          dir: resolved.path,
+          pattern,
+          include,
+          exclude,
+        })
         if (isErrorResult(matches)) return matches
         const fileCount = new Set(matches.map((match) => match.path)).size
         const out: Array<ReturnType<typeof outputPayload> | [string, string | number | boolean | undefined]> = [
-          ["path", dir],
+          ["path", resolved.path],
           ["pattern", pattern],
           ["matches_total", matches.length],
           ["matches_files", fileCount],
@@ -362,23 +299,30 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         encoding: z.enum(["utf8", "base64"]).optional().describe("How file content is interpreted when type is \"file\": \"utf8\" (default) or \"base64\"."),
       },
       implementation: async ({ type, path: input, content, overwrite, recursive, encoding }) => {
-        const base = baseDir()
-        const target = resolveInputPath(base, input)
-        if (isErrorOutput(target)) return target
+        const baseContext = await resolveBaseContext()
+        const resolved = resolveToolPath(baseContext.base, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const target = resolved.path
 
         if (type === "file") {
-          const { stat, error } = await ensureExistingPathIsSafe(base, target, "file")
-          if (error) return error
-          if (stat?.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", target]])
-          if (stat && !overwrite) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
+          const existing = await inspectExistingPath(baseContext.base, target, "file")
+          if (existing.ok) {
+            if (!overwrite) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
+          } else if (existing.kind !== "not_found") {
+            return formatBoundaryFailure(existing, "file")
+          } else {
+            const creatable = await inspectCreateTarget(baseContext.base, target, "file")
+            if (!creatable.ok) return formatBoundaryFailure(creatable, "file")
+          }
+
           const fileEncoding = encoding ?? "utf8"
           const rec = recursive ?? true
           const text = content || ""
           const lines = text.split(/\r?\n/)
           const count = text.length > 0 ? (text.endsWith("\n") ? lines.length - 1 : lines.length) : 0
+
           try {
-            const parentError = await ensureParentWithinBase(base, target)
-            if (parentError) return parentError
             if (rec) await fs.mkdir(path.dirname(target), { recursive: true })
             const bytes = fileEncoding === "base64"
               ? Buffer.from(text, "base64")
@@ -389,7 +333,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
               ["type", "file"],
               ["status", "created"],
               ["encoding", fileEncoding],
-              ["overwritten", Boolean(stat)],
+              ["overwritten", existing.ok],
               ["lines", count],
               ["bytes", bytes.byteLength],
             ])
@@ -398,7 +342,6 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           }
         }
 
-        // type === "directory"
         if (content !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "content"]])
         }
@@ -408,14 +351,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (encoding !== undefined) {
           return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "encoding"]])
         }
-        const { stat, error } = await ensureExistingPathIsSafe(base, target, "directory")
-        if (error) return error
-        if (stat?.isFile()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", target]])
-        if (stat) return formatError("already_exists", "Directory already exists", [["kind", "directory"], ["path", target]])
+
+        const existing = await inspectExistingPath(baseContext.base, target, "directory")
+        if (existing.ok) return formatError("already_exists", "Directory already exists", [["kind", "directory"], ["path", target]])
+        if (existing.kind !== "not_found") return formatBoundaryFailure(existing, "directory")
+
+        const creatable = await inspectCreateTarget(baseContext.base, target, "directory")
+        if (!creatable.ok) return formatBoundaryFailure(creatable, "directory")
+
         const rec = recursive ?? true
         try {
-          const parentError = await ensureParentWithinBase(base, target)
-          if (parentError) return parentError
           await fs.mkdir(target, { recursive: rec })
         } catch (error) {
           return formatError("filesystem_error", "Filesystem operation failed", [["path", target], ["details", error instanceof Error ? error.message : String(error)]])
@@ -450,15 +395,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         encoding: z.enum(["utf8"]).optional().describe("The file encoding to use while editing. Default: \"utf8\"."),
       },
       implementation: async ({ path: input, edits, encoding }) => {
-        const base = baseDir()
-        const file = resolveInputPath(base, input)
-        if (isErrorOutput(file)) return file
+        const baseContext = await resolveBaseContext()
+        const resolved = resolveToolPath(baseContext.base, input)
+        if (resolved.error || !resolved.path) return resolved.error!
 
-        const { stat, error } = await ensureExistingPathIsSafe(base, file, "file")
-        if (error) return error
-        if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
-        if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
-        if (await binary(file)) return formatError("binary_file", "Cannot edit binary file", [["path", file]])
+        const checked = await inspectExistingPath(baseContext.base, resolved.path, "file")
+        if (!checked.ok) return formatBoundaryFailure(checked, "file")
+        if (await binary(resolved.path)) return formatError("binary_file", "Cannot edit binary file", [["path", resolved.path]])
 
         const countMatches = (body: string, needle: string) => {
           let count = 0
@@ -471,15 +414,15 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           }
         }
 
-        let body = await fs.readFile(file, "utf8")
+        let body = await fs.readFile(resolved.path, "utf8")
         for (const edit of edits) {
           if (edit.oldString.length === 0) return formatError("invalid_parameter", "Parameter must not be empty", [["parameter", "oldString"]])
           if (edit.oldString === edit.newString) return formatError("no_change", "Edit would not change the file")
 
           const matches = countMatches(body, edit.oldString)
-          if (matches === 0) return formatError("match_not_found", "oldString not found", [["path", file]])
+          if (matches === 0) return formatError("match_not_found", "oldString not found", [["path", resolved.path]])
           if (matches > 1 && edit.replaceAll !== true) {
-            return formatError("ambiguous_match", "oldString matched multiple times", [["path", file], ["matches", matches], ["details", "Use replaceAll to edit all matches"]])
+            return formatError("ambiguous_match", "oldString matched multiple times", [["path", resolved.path], ["matches", matches], ["details", "Use replaceAll to edit all matches"]])
           }
 
           if (edit.replaceAll) {
@@ -491,9 +434,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           body = body.slice(0, index) + edit.newString + body.slice(index + edit.oldString.length)
         }
 
-        await fs.writeFile(file, body, "utf8")
+        await fs.writeFile(resolved.path, body, "utf8")
         return formatOutput([
-          ["path", file],
+          ["path", resolved.path],
           ["type", "file"],
           ["status", "edited"],
           ["encoding", encoding ?? "utf8"],
