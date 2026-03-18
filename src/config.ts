@@ -6,8 +6,8 @@ export const configSchematics = createConfigSchematics()
     "string",
     {
       displayName: "Sandbox Base Directory",
-      subtitle: "Optional sandbox root. Leave empty to use the user's home directory as the sandbox.",
-      placeholder: "~/project",
+      subtitle: "Tools will only be allowed to operate on files within this directory. Default: ~/",
+      placeholder: "~/",
       isParagraph: false,
     },
     "",
