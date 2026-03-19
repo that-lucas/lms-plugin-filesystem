@@ -154,8 +154,7 @@ const collectFileEntries = async (sandboxBaseDir: string, realBase: string, dir:
 
   const paths = result.stdout
     .split(/\r?\n/)
-    .map((rawLine) => rawLine.trim())
-    .filter((filePath) => filePath.length > 0)
+    .filter((rawLine) => rawLine.length > 0)
 
   const out: GlobEntry[] = []
   const inspected = await Promise.all(paths.map(async (filePath) => {

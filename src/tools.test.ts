@@ -759,11 +759,11 @@ describe("grep tool", () => {
     expect(parseError(result).code).toBe("out_of_range")
   })
 
-  it("counts files only within the current page", async () => {
+  it("reports total file count across all matches regardless of page", async () => {
     const page1 = await tools.grep({ pattern: "foo", path: tmp, limit: 3 })
-    expect(parseGrep(page1).files).toBe(1)
+    expect(parseGrep(page1).files).toBe(2)
     const page2 = await tools.grep({ pattern: "foo", path: tmp, offset: 4, limit: 3 })
-    expect(parseGrep(page2).files).toBe(1)
+    expect(parseGrep(page2).files).toBe(2)
   })
 })
 

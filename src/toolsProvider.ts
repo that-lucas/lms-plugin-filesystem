@@ -214,7 +214,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         }
 
         const slice = matches.slice(start, start + size)
-        const fileCount = new Set(slice.map((match) => match.path)).size
+        const fileCount = new Set(matches.map((match) => match.path)).size
         const hasMore = start + slice.length < matches.length
         const out: Array<ReturnType<typeof outputPayload> | [string, string | number | boolean | undefined]> = [
           ["path", resolved.path],
