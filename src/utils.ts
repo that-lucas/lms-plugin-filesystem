@@ -169,7 +169,13 @@ export const walk = async (base: string, realBase: string, opts?: WalkOptions) =
 
   const visit = async (dir: string) => {
     if (blocked(dir, base)) return
-    const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+    let items: import("fs").Dirent[]
+    try {
+      items = await fs.readdir(dir, { withFileTypes: true })
+    } catch (err: unknown) {
+      if (dir !== base && err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") return
+      throw err
+    }
     items.sort((a, b) => a.name.localeCompare(b.name))
 
     for (const item of items) {

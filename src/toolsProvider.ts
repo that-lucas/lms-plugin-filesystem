@@ -181,7 +181,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description:
         "Search file contents by regular expression when you know the text pattern you want to find. Do not use this tool to find files by name or pattern; use glob for that.",
       parameters: {
-        pattern: z.string().describe("Required. Regular expression to search for inside file contents, for example \"TODO\", \"describe\\\\(\", or \"export\\\\s+const\"."),
+        pattern: z.string().min(1).describe("Required. Regular expression to search for inside file contents, for example \"TODO\", \"describe\\\\(\", or \"export\\\\s+const\"."),
         path: z.string().describe("Required. Absolute or home-relative directory path to search from."),
         include: z.array(z.string()).optional().describe("Optional. File glob patterns limiting which files are searched, for example [\"*.ts\", \"*.js\"] or [\"src/**\"]."),
         exclude: z.array(z.string()).optional().describe("Optional. File glob patterns to leave out of the search, for example [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
@@ -252,48 +252,53 @@ export async function toolsProvider(ctl: ToolsProviderController) {
 
         const checked = await inspectExistingPath(sandboxContext.sandboxBaseDir, resolved.path, "file")
         if (!checked.ok) return formatBoundaryFailure(checked, "file")
-        if (await binary(resolved.path)) return formatError("binary_file", "Cannot read binary file", [["path", resolved.path]])
 
-        const size = limit || READ_LIMIT
-        const start = (offset || 1) - 1
-        const raw: string[] = []
-        let total = 0
-        let truncated = false
-        const stream = createReadStream(resolved.path, { encoding: "utf8" })
-        const rl = createInterface({ input: stream, crlfDelay: Infinity })
         try {
-          for await (const text of rl) {
-            total += 1
-            if (total <= start) continue
-            if (raw.length >= size) {
-              truncated = true
-              continue
+          if (await binary(resolved.path)) return formatError("binary_file", "Cannot read binary file", [["path", resolved.path]])
+
+          const size = limit || READ_LIMIT
+          const start = (offset || 1) - 1
+          const raw: string[] = []
+          let total = 0
+          let truncated = false
+          const stream = createReadStream(resolved.path, { encoding: "utf8" })
+          const rl = createInterface({ input: stream, crlfDelay: Infinity })
+          try {
+            for await (const text of rl) {
+              total += 1
+              if (total <= start) continue
+              if (raw.length >= size) {
+                truncated = true
+                continue
+              }
+              raw.push(text)
             }
-            raw.push(text)
+          } finally {
+            rl.close()
+            stream.destroy()
           }
-        } finally {
-          rl.close()
-          stream.destroy()
-        }
 
-        if (total < (offset || 1) && !(total === 0 && (offset || 1) === 1)) {
-          return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", total], ["unit", "lines"]])
-        }
+          if (total < (offset || 1) && !(total === 0 && (offset || 1) === 1)) {
+            return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", total], ["unit", "lines"]])
+          }
 
-        const startOffset = offset || 1
-        const lines = raw.map((line, index) => `${index + startOffset}: ${line}`).join("\n")
-        const hasMore = truncated
-        const next = startOffset + raw.length
-        return formatOutput([
-          ["path", resolved.path],
-          ["type", "file"],
-          ["offset", startOffset],
-          ["limit", raw.length],
-          ["total", total],
-          ["has_more", hasMore],
-          ["next_offset", hasMore ? next : undefined],
-          outputPayload("content", lines),
-        ])
+          const startOffset = offset || 1
+          const lines = raw.map((line, index) => `${index + startOffset}: ${line}`).join("\n")
+          const hasMore = truncated
+          const next = startOffset + raw.length
+          return formatOutput([
+            ["path", resolved.path],
+            ["type", "file"],
+            ["offset", startOffset],
+            ["limit", raw.length],
+            ["total", total],
+            ["has_more", hasMore],
+            ["next_offset", hasMore ? next : undefined],
+            outputPayload("content", lines),
+          ])
+        } catch (error) {
+          return formatError("filesystem_error", "Filesystem operation failed", [["path", resolved.path], ["details", error instanceof Error ? error.message : String(error)]])
+        }
       },
     }),
   )
@@ -449,7 +454,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           body = body.slice(0, index) + edit.newString + body.slice(index + edit.oldString.length)
         }
 
-        await fs.writeFile(resolved.path, body, "utf8")
+        try {
+          await fs.writeFile(resolved.path, body, "utf8")
+        } catch (error) {
+          return formatError("filesystem_error", "Filesystem operation failed", [["path", resolved.path], ["details", error instanceof Error ? error.message : String(error)]])
+        }
         return formatOutput([
           ["path", resolved.path],
           ["type", "file"],
