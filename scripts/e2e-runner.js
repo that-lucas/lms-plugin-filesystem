@@ -227,15 +227,21 @@ function assertFinalMessage(response) {
   assert(messages.length > 0, `Expected final assistant message. Full response: ${JSON.stringify(response, null, 2)}`)
 }
 
-function firstToolCall(response, tool) {
+function allToolCalls(response, tool) {
   const invalid = (response.output || []).filter((item) => item.type === "invalid_tool_call")
   if (invalid.length > 0) {
     throw new Error(`Invalid tool call returned: ${JSON.stringify(invalid, null, 2)}`)
   }
-  const toolCalls = (response.output || []).filter((item) => item.type === "tool_call")
+  const toolCalls = (response.output || []).filter((item) => item.type === "tool_call" && item.tool === tool)
+  for (const call of toolCalls) {
+    assert.equal(call.provider_info?.plugin_id, pluginId)
+  }
+  return toolCalls
+}
+
+function firstToolCall(response, tool) {
+  const toolCalls = allToolCalls(response, tool)
   assert.equal(toolCalls.length, 1, `Expected exactly one ${tool} tool call, received ${toolCalls.length}. Full response: ${JSON.stringify(response, null, 2)}`)
-  assert.equal(toolCalls[0].tool, tool)
-  assert.equal(toolCalls[0].provider_info?.plugin_id, pluginId)
   return toolCalls[0]
 }
 
@@ -411,6 +417,29 @@ const scenarios = {
         const parsed = parseGrepOutput(call.output)
         assert.equal(parsed.total, expected.length)
         assert.deepEqual(parsed.matches.sort((a, b) => `${a.path}:${a.line}`.localeCompare(`${b.path}:${b.line}`)), expected)
+      },
+    },
+    {
+      name: "paginate-sentinel-matches",
+      prompt: (ctx) => `Make two grep tool calls. First call: pattern \`PAGINATION_SENTINEL\`, path \`${ctx.srcRel}\`, limit 2. Second call: pattern \`PAGINATION_SENTINEL\`, path \`${ctx.srcRel}\`, offset 3, limit 2.`,
+      assert: async (ctx, response) => {
+        const calls = allToolCalls(response, "grep")
+        assert(calls.length >= 2, `Expected at least 2 grep calls for pagination, got ${calls.length}. Full response: ${JSON.stringify(response, null, 2)}`)
+        assert.equal(calls[0].arguments.limit, 2, "First grep call should use limit 2")
+
+        const combined = []
+        for (const call of calls) {
+          assert(pathMatches(call.arguments.path, ctx.srcAbs))
+          const parsed = parseGrepOutput(call.output)
+          combined.push(...parsed.matches)
+        }
+
+        const expected = await collectLiteralMatches(ctx.srcAbs, (_, name) => name.endsWith(".ts"), "PAGINATION_SENTINEL")
+        assert.equal(combined.length, expected.length, `Expected ${expected.length} total matches across all pages, got ${combined.length}`)
+        assert.deepEqual(
+          combined.sort((a, b) => `${a.path}:${a.line}`.localeCompare(`${b.path}:${b.line}`)),
+          expected,
+        )
       },
     },
   ],
