@@ -5,3 +5,5 @@ test-fixtures/
 .DS_Store
 .lmstudio/
 package-lock.json
+.mcp.json
+.env

@@ -1,175 +1,115 @@
 import { tool, Tool, ToolsProviderController } from "@lmstudio/sdk"
-import { createReadStream, existsSync, type Stats } from "node:fs"
+import { createReadStream } from "node:fs"
 import * as fs from "node:fs/promises"
 import path from "node:path"
 import { createInterface } from "node:readline"
-import { Minimatch } from "minimatch"
 import { z } from "zod"
-import { configSchematics } from "./config"
-import { formatError, formatOutput, isErrorOutput, outputPayload } from "./errors"
 import {
-  READ_LIMIT,
-  FILE_LIMIT,
-  PathOutsideBaseError,
-  expandHome,
-  resolvePath,
-  relPath,
-  walk,
-  binary,
-  formatTree,
-} from "./utils"
+  type BoundaryExpectedKind,
+  type BoundaryFailure,
+  inspectCreateTarget,
+  inspectExistingPath,
+  inspectTraversalRoot,
+  resolveConfiguredSandboxBaseDir,
+  resolveUserPath,
+} from "./boundary"
+import { configSchematics } from "./config"
+import { formatError, formatOutput, outputPayload } from "./errors"
+import { globWithRipgrep, grepWithRipgrep, isErrorResult } from "./ripgrep"
+import { FILE_LIMIT, GREP_LIMIT, READ_LIMIT, binary, formatTree, walk } from "./utils"
+
+type SandboxContext = {
+  sandboxBaseDir: string
+  realSandboxBaseDir: string
+}
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const tools: Tool[] = []
 
-  const baseDir = () => {
-    const dir = ctl.getPluginConfig(configSchematics).get("baseDir")?.trim()
-    const full = path.resolve(expandHome(dir || "~"))
-    if (!existsSync(full)) throw new Error(formatError("filesystem_error", "Base directory does not exist", [["path", full]]))
-    return full
-  }
-
-  const resolveInputPath = (base: string, input?: string) => {
-    try {
-      return input && path.isAbsolute(input) ? resolvePath(base, path.relative(base, input)) : resolvePath(base, input)
-    } catch (error) {
-      if (error instanceof PathOutsideBaseError) {
-        return formatError("path_outside_base", "Path is outside the configured base directory", [["path", error.filePath]])
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return formatError("filesystem_error", "Filesystem operation failed", [["details", message]])
+  const resolveSandboxContext = async (): Promise<SandboxContext> => {
+    const configured = ctl.getPluginConfig(configSchematics).get("sandboxBaseDir")
+    const result = await resolveConfiguredSandboxBaseDir(configured)
+    if (!result.ok) {
+      throw new Error(formatError("filesystem_error", "Filesystem operation failed", [["path", result.resolvedPath], ["details", result.details]]))
     }
+    return { sandboxBaseDir: result.resolvedPath, realSandboxBaseDir: result.realBase }
   }
 
-  const ensureExistingPathIsSafe = async (target: string, expected: "file" | "directory"): Promise<{ stat?: Stats; error?: string }> => {
-    const stat = await fs.lstat(target).catch(() => undefined)
-    if (stat?.isSymbolicLink()) {
-      return { error: formatError("wrong_type", "Path is a symbolic link", [["expected", expected], ["actual", "symlink"], ["path", target]]) }
+  const formatBoundaryFailure = (result: BoundaryFailure, expected: BoundaryExpectedKind) => {
+    if (result.kind === "outside_base") {
+      return formatError("path_outside_base", "Path is outside the configured sandbox base directory", [["path", result.resolvedPath]])
     }
-    return { stat }
-  }
 
-  const ensureParentWithinBase = async (base: string, target: string) => {
-    const realBase = await fs.realpath(base).catch(() => base)
-    let current = path.dirname(target)
-    while (true) {
-      const stat = await fs.lstat(current).catch(() => undefined)
-      if (stat) {
-        const realCurrent = await fs.realpath(current).catch(() => current)
-        const rel = path.relative(realBase, realCurrent)
-        if (rel.startsWith("..") || path.isAbsolute(rel)) {
-          return formatError("path_outside_base", "Path is outside the configured base directory", [["path", target]])
-        }
-        return undefined
-      }
-      const parent = path.dirname(current)
-      if (parent === current) return undefined
-      current = parent
+    if (result.kind === "not_found") {
+      const kind = expected === "directory" ? "directory" : "file"
+      return formatError("not_found", kind === "directory" ? "Directory not found" : "File not found", [["kind", kind], ["path", result.resolvedPath]])
     }
+
+    if (result.kind === "wrong_type") {
+      return formatError(
+        "wrong_type",
+        `Path is not a ${expected}`,
+        [["expected", expected], ["actual", result.actual ?? "other"], ["path", result.resolvedPath]],
+      )
+    }
+
+    return formatError("filesystem_error", "Filesystem operation failed", [["path", result.resolvedPath], ["details", result.details]])
   }
 
-  tools.push(
-    tool({
-      name: "read",
-      description: "Read text from a file at an absolute or home-relative path with optional line offset and limit.",
-      parameters: {
-        filePath: z.string().describe("Absolute or home-relative file path to read from, e.g., \"/home/user/file.txt\", \"~/docs/notes.md\"."),
-        offset: z.number().int().min(1).optional().describe("Starting line number, 1-indexed, e.g., 1, 50, 100."),
-        limit: z.number().int().min(1).optional().describe("Maximum number of lines to return, e.g., 50, 200."),
-      },
-      implementation: async ({ filePath, offset, limit }) => {
-        const base = baseDir()
-        const file = resolveInputPath(base, filePath)
-        if (isErrorOutput(file)) return file
-        const { stat, error } = await ensureExistingPathIsSafe(file, "file")
-        if (error) return error
-        if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
-        if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
-        if (await binary(file)) return formatError("binary_file", "Cannot read binary file", [["path", file]])
-
-        const size = limit || READ_LIMIT
-        const start = (offset || 1) - 1
-        const raw: string[] = []
-        let total = 0
-        let truncated = false
-        const stream = createReadStream(file, { encoding: "utf8" })
-        const rl = createInterface({ input: stream, crlfDelay: Infinity })
-        try {
-          for await (const text of rl) {
-            total += 1
-            if (total <= start) continue
-            if (raw.length >= size) {
-              truncated = true
-              continue
-            }
-            raw.push(text)
-          }
-        } finally {
-          rl.close()
-          stream.destroy()
-        }
-
-        if (total < (offset || 1) && !(total === 0 && (offset || 1) === 1)) {
-          return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", total], ["unit", "lines"]])
-        }
-
-        const startOffset = offset || 1
-        const lines = raw.map((line, index) => `${index + startOffset}: ${line}`).join("\n")
-        const hasMore = truncated
-        const next = startOffset + raw.length
-        return formatOutput([
-          ["path", file],
-          ["type", "file"],
-          ["offset", startOffset],
-          ["limit", raw.length],
-          ["total", total],
-          ["has_more", hasMore],
-          ["next_offset", hasMore ? next : undefined],
-          outputPayload("content", lines),
-        ])
-      },
-    }),
-  )
+  const resolveToolPath = (base: string, input?: string) => {
+    const result = resolveUserPath(base, input)
+    if (!result.ok) return { error: formatBoundaryFailure(result, "any"), path: undefined as string | undefined }
+    return { path: result.resolvedPath, error: undefined as string | undefined }
+  }
 
   tools.push(
     tool({
       name: "list",
-      description: "List files or directories from an absolute or home-relative directory with optional recursion, filtering, and pagination.",
+      description: "Browse the contents of a directory when you want to inspect what exists before choosing a file path or search pattern. Use this for directory browsing; use glob for file-name pattern matching.",
       parameters: {
-        path: z.string().optional().describe("Absolute or home-relative directory path to list from, e.g., \"/home/user/project\", \"~/documents\"."),
-        ignore: z.array(z.string()).optional().describe("Array of glob patterns for paths to skip during traversal, e.g., [\"dist\", \"coverage\", \"generated/**\"]."),
-        recursive: z.boolean().optional().describe("Recurse into subdirectories, e.g., true, false."),
-        type: z.enum(["files", "directories", "all"]).optional().describe("Whether to return files, directories, or all, e.g., \"files\", \"directories\", \"all\"."),
-        offset: z.number().int().min(1).optional().describe("Starting entry number, 1-indexed, e.g., 1, 50."),
-        limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("Maximum number of entries to return, e.g., 50, 100."),
+        path: z.string().describe("Required. Absolute or home-relative directory path to browse."),
+        ignore: z.array(z.string()).optional().describe("Optional. Array of glob patterns to skip while browsing, for example [\"dist/**\", \"coverage/**\", \"build/**\"]."),
+        recursive: z.boolean().optional().describe("Optional. When true, include nested subdirectories. Default: false."),
+        type: z.enum(["files", "directories", "all"]).optional().describe("Optional. What to return: \"files\", \"directories\", or \"all\". Default: \"all\"."),
+        offset: z.number().int().min(1).optional().describe("Optional. 1-indexed result number to start from. Default: 1."),
+        limit: z.number().int().min(1).optional().describe("Optional. Maximum number of entries to return. Default: 100."),
       },
       implementation: async ({ path: input, ignore, recursive, type, offset, limit }) => {
-        const base = baseDir()
-        const dir = resolveInputPath(base, input)
-        if (isErrorOutput(dir)) return dir
-        const stat = await fs.stat(dir).catch(() => undefined)
-        if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
-        if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
+        const sandboxContext = await resolveSandboxContext()
+        const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectTraversalRoot(sandboxContext.sandboxBaseDir, resolved.path)
+        if (!checked.ok) return formatBoundaryFailure(checked, "directory")
+
         const deep = recursive ?? false
         const kind = type ?? "all"
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
-        const found = await walk(dir, { ignore, recursive: deep, type: kind })
+
+        let found
+        try {
+          found = await walk(resolved.path, sandboxContext.realSandboxBaseDir, { ignore, recursive: deep, type: kind, sandboxBaseDir: sandboxContext.sandboxBaseDir })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return formatError("filesystem_error", "Filesystem operation failed", [["path", resolved.path], ["details", message]])
+        }
+
         const slice = found.slice(start, start + size)
         const out = !deep
           ? [
-              `${dir}/`,
+              `${resolved.path}/`,
               ...slice
                 .sort((a, b) => a.path.localeCompare(b.path))
                 .map((item) => `  ${path.basename(item.path)}${item.dir ? "/" : ""}`),
             ].join("\n")
-          : formatTree(dir, slice)
+          : formatTree(resolved.path, slice)
         if (found.length < (offset ?? 1) && !(found.length === 0 && (offset ?? 1) === 1)) {
           return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", found.length], ["unit", "entries"]])
         }
         const hasMore = start + slice.length < found.length
         return formatOutput([
-          ["path", dir],
+          ["path", resolved.path],
           ["type", "directory"],
           ["offset", offset ?? 1],
           ["limit", slice.length],
@@ -185,47 +125,44 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   tools.push(
     tool({
       name: "glob",
-      description: "Match file or directory paths by glob pattern from an absolute or home-relative directory. Use this to find files by name or path, not by file contents.",
+      description: "Find file paths by glob pattern when you know what the path should look like. This tool returns matching file paths only. Use list if you need to browse directories first.",
       parameters: {
-        pattern: z.string().describe("Glob pattern to match against file or directory paths relative to the search root, e.g., \"*.ts\", \"src/**/*.tsx\", \"**/*Tests*.cs\"."),
-        path: z.string().optional().describe("Absolute or home-relative directory path to search from, e.g., \"/home/user/project\", \"~/src\"."),
-        type: z.enum(["files", "directories", "all"]).optional().describe("Whether to match files, directories, or all, e.g., \"files\", \"directories\", \"all\"."),
-        include: z.array(z.string()).optional().describe("Array of glob patterns that returned entries must match, e.g., [\"src/**\", \"**/*.ts\"]."),
-        exclude: z.array(z.string()).optional().describe("Array of glob patterns for entries to exclude from results and traversal, e.g., [\"dist/**\", \"**/*.test.ts\"]."),
-        offset: z.number().int().min(1).optional().describe("Starting entry number, 1-indexed, e.g., 1, 50."),
-        limit: z.number().int().min(1).max(FILE_LIMIT).optional().describe("Maximum number of entries to return, e.g., 50, 100."),
+        pattern: z.string().describe("Required. Primary glob pattern to match, for example \"*.ts\", \"*Tests.ts\", \"**/*.generated.ts\", or \"src/**/*.ts\"."),
+        path: z.string().describe("Required. Absolute or home-relative directory path to search from."),
+        include: z.array(z.string()).optional().describe("Optional. Additional file glob patterns to include when one pattern is not enough."),
+        exclude: z.array(z.string()).optional().describe("Optional. File glob patterns to exclude from results, for example [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
+        offset: z.number().int().min(1).optional().describe("Optional. 1-indexed result number to start from. Default: 1."),
+        limit: z.number().int().min(1).optional().describe("Optional. Maximum number of matches to return. Default: 100."),
       },
-      implementation: async ({ pattern, path: input, type, include, exclude, offset, limit }) => {
-        const base = baseDir()
-        const dir = resolveInputPath(base, input)
-        if (isErrorOutput(dir)) return dir
-        const stat = await fs.stat(dir).catch(() => undefined)
-        if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
-        if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
-        const matcher = new Minimatch(pattern, { dot: true, nocase: true })
-        const kind = type ?? "files"
+      implementation: async ({ pattern, path: input, include, exclude, offset, limit }) => {
+        const sandboxContext = await resolveSandboxContext()
+        const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectTraversalRoot(sandboxContext.sandboxBaseDir, resolved.path)
+        if (!checked.ok) return formatBoundaryFailure(checked, "directory")
+
         const start = (offset ?? 1) - 1
         const size = limit ?? FILE_LIMIT
-        const found = (await walk(dir, { recursive: true, type: kind, include, exclude })).filter((file) => {
-          const rel = relPath(dir, file.path)
-          return matcher.match(rel)
+        const files = await globWithRipgrep({
+          sandboxBaseDir: sandboxContext.sandboxBaseDir,
+          realBase: sandboxContext.realSandboxBaseDir,
+          dir: resolved.path,
+          pattern,
+          include,
+          exclude,
         })
-        const files = await Promise.all(
-          found.map(async (file) => ({
-            path: file.path,
-            time: (await fs.stat(file.path)).mtime.getTime(),
-          })),
-        )
-        files.sort((a, b) => b.time - a.time)
+        if (isErrorResult(files)) return files
         if (files.length < (offset ?? 1) && !(files.length === 0 && (offset ?? 1) === 1)) {
           return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", files.length], ["unit", "entries"]])
         }
+
         const slice = files.slice(start, start + size)
-        const lines = slice.map((item) => item.path).join("\n")
+        const lines = slice.join("\n")
         const hasMore = start + slice.length < files.length
         return formatOutput([
-          ["path", dir],
-          ["type", kind],
+          ["path", resolved.path],
+          ["type", "files"],
           ["pattern", pattern],
           ["offset", offset ?? 1],
           ["limit", slice.length],
@@ -242,67 +179,54 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     tool({
       name: "grep",
       description:
-        "Search file contents with a regular expression from an absolute or home-relative directory. Use this only for text inside files, not for file names or paths.",
+        "Search file contents by regular expression when you know the text pattern you want to find. Do not use this tool to find files by name or pattern; use glob for that.",
       parameters: {
-        pattern: z.string().describe("Regular expression to search for inside file contents, not file names or paths, e.g., \"describe\\\\(\", \"TODO\", \"class\\\\s+User\"."),
-        path: z.string().optional().describe("Absolute or home-relative directory path to search from, e.g., \"/home/user/project\", \"~/src\"."),
-        include: z.array(z.string()).optional().describe("Array of glob patterns that candidate files must match before their contents are searched, e.g., [\"**/*.cs\", \"src/**\"]."),
-        exclude: z.array(z.string()).optional().describe("Array of glob patterns for files or directories to exclude from the search, e.g., [\"dist/**\", \"**/*.generated.cs\"]."),
+        pattern: z.string().min(1).describe("Required. Regular expression to search for inside file contents, for example \"TODO\", \"describe\\\\(\", or \"export\\\\s+const\"."),
+        path: z.string().describe("Required. Absolute or home-relative directory path to search from."),
+        include: z.array(z.string()).optional().describe("Optional. File glob patterns limiting which files are searched, for example [\"*.ts\", \"*.js\"] or [\"src/**\"]."),
+        exclude: z.array(z.string()).optional().describe("Optional. File glob patterns to leave out of the search, for example [\"dist/**\", \"coverage/**\", \"build/**\"] or [\"**/*.generated.ts\"]."),
+        offset: z.number().int().min(1).optional().describe("Optional. 1-indexed match number to start from. Default: 1."),
+        limit: z.number().int().min(1).optional().describe("Optional. Maximum number of matches to return. Default: 50."),
       },
-      implementation: async ({ pattern, path: input, include, exclude }) => {
-        const base = baseDir()
-        const dir = resolveInputPath(base, input)
-        if (isErrorOutput(dir)) return dir
-        const stat = await fs.stat(dir).catch(() => undefined)
-        if (!stat) return formatError("not_found", "Directory not found", [["kind", "directory"], ["path", dir]])
-        if (!stat.isDirectory()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", dir]])
-        let regex: RegExp
-        try {
-          regex = new RegExp(pattern, "u")
-        } catch (error) {
-          return formatError("invalid_pattern", "Invalid regular expression", [["pattern", pattern], ["details", error instanceof Error ? error.message : String(error)]])
+      implementation: async ({ pattern, path: input, include, exclude, offset, limit }) => {
+        const sandboxContext = await resolveSandboxContext()
+        const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectTraversalRoot(sandboxContext.sandboxBaseDir, resolved.path)
+        if (!checked.ok) return formatBoundaryFailure(checked, "directory")
+
+        const matches = await grepWithRipgrep({
+          sandboxBaseDir: sandboxContext.sandboxBaseDir,
+          realBase: sandboxContext.realSandboxBaseDir,
+          dir: resolved.path,
+          pattern,
+          include,
+          exclude,
+        })
+        if (isErrorResult(matches)) return matches
+
+        const start = (offset ?? 1) - 1
+        const size = limit ?? GREP_LIMIT
+
+        if (matches.length < (offset ?? 1) && !(matches.length === 0 && (offset ?? 1) === 1)) {
+          return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", matches.length], ["unit", "matches"]])
         }
-        const files = await walk(dir, { recursive: true, type: "files", include, exclude })
-        const orderedFiles = await Promise.all(
-          files.map(async (file) => ({
-            path: file.path,
-            time: (await fs.stat(file.path)).mtime.getTime(),
-          })),
-        )
-        orderedFiles.sort((a, b) => b.time - a.time)
-        const matches: { path: string; line: number; text: string }[] = []
-        for (const file of orderedFiles) {
-          if (await binary(file.path)) continue
-          const stream = createReadStream(file.path, { encoding: "utf8" })
-          const rl = createInterface({ input: stream, crlfDelay: Infinity })
-          let lineNumber = 0
-          try {
-            for await (const line of rl) {
-              lineNumber += 1
-              if (!regex.test(line)) {
-                regex.lastIndex = 0
-                continue
-              }
-              matches.push({
-                path: file.path,
-                line: lineNumber,
-                text: line,
-              })
-              regex.lastIndex = 0
-            }
-          } finally {
-            rl.close()
-            stream.destroy()
-          }
-        }
+
+        const slice = matches.slice(start, start + size)
         const fileCount = new Set(matches.map((match) => match.path)).size
+        const hasMore = start + slice.length < matches.length
         const out: Array<ReturnType<typeof outputPayload> | [string, string | number | boolean | undefined]> = [
-          ["path", dir],
+          ["path", resolved.path],
           ["pattern", pattern],
-          ["matches_total", matches.length],
+          ["offset", offset ?? 1],
+          ["limit", slice.length],
+          ["total", matches.length],
+          ["has_more", hasMore],
+          ["next_offset", hasMore ? start + slice.length + 1 : undefined],
           ["matches_files", fileCount],
         ]
-        for (const [index, match] of matches.entries()) {
+        for (const [index, match] of slice.entries()) {
           out.push([`matches_${index}_path`, match.path])
           out.push([`matches_${index}_line`, match.line])
           out.push(outputPayload(`matches_${index}_content`, match.text))
@@ -314,37 +238,111 @@ export async function toolsProvider(ctl: ToolsProviderController) {
 
   tools.push(
     tool({
+      name: "read",
+      description: "Read text from one file when you already know the exact file path and want line-numbered output. Do not use this tool to discover files or directories; use list or glob first if needed.",
+      parameters: {
+        filePath: z.string().describe("Required. Absolute or home-relative path to the file to read, for example \"~/project/src/index.ts\"."),
+        offset: z.number().int().min(1).optional().describe("Optional. 1-indexed starting line number. Default: 1."),
+        limit: z.number().int().min(1).optional().describe("Optional. Maximum number of lines to return. Default: 500."),
+      },
+      implementation: async ({ filePath, offset, limit }) => {
+        const sandboxContext = await resolveSandboxContext()
+        const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, filePath)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const checked = await inspectExistingPath(sandboxContext.sandboxBaseDir, resolved.path, "file")
+        if (!checked.ok) return formatBoundaryFailure(checked, "file")
+
+        try {
+          if (await binary(resolved.path)) return formatError("binary_file", "Cannot read binary file", [["path", resolved.path]])
+
+          const size = limit || READ_LIMIT
+          const start = (offset || 1) - 1
+          const raw: string[] = []
+          let total = 0
+          let truncated = false
+          const stream = createReadStream(resolved.path, { encoding: "utf8" })
+          const rl = createInterface({ input: stream, crlfDelay: Infinity })
+          try {
+            for await (const text of rl) {
+              total += 1
+              if (total <= start) continue
+              if (raw.length >= size) {
+                truncated = true
+                continue
+              }
+              raw.push(text)
+            }
+          } finally {
+            rl.close()
+            stream.destroy()
+          }
+
+          if (total < (offset || 1) && !(total === 0 && (offset || 1) === 1)) {
+            return formatError("out_of_range", "Offset is out of range", [["parameter", "offset"], ["value", offset!], ["total", total], ["unit", "lines"]])
+          }
+
+          const startOffset = offset || 1
+          const lines = raw.map((line, index) => `${index + startOffset}: ${line}`).join("\n")
+          const hasMore = truncated
+          const next = startOffset + raw.length
+          return formatOutput([
+            ["path", resolved.path],
+            ["type", "file"],
+            ["offset", startOffset],
+            ["limit", raw.length],
+            ["total", total],
+            ["has_more", hasMore],
+            ["next_offset", hasMore ? next : undefined],
+            outputPayload("content", lines),
+          ])
+        } catch (error) {
+          return formatError("filesystem_error", "Filesystem operation failed", [["path", resolved.path], ["details", error instanceof Error ? error.message : String(error)]])
+        }
+      },
+    }),
+  )
+
+  tools.push(
+    tool({
       name: "create",
       description:
-        "Create a file or directory at an absolute or home-relative path, with optional file overwrite and parent directory creation.",
+        "Create one new file or one new directory. Use this to add files, folders, or initial file content. Make sure type matches what you want to create, because some parameters are valid only for files.",
       parameters: {
-        type: z.enum(["file", "directory"]).describe("Whether to create a file or directory, e.g., \"file\", \"directory\"."),
-        path: z.string().describe("Absolute or home-relative target path to create, e.g., \"/home/user/new.txt\", \"~/project/src\"."),
-        content: z.string().optional().describe("File content to write when type is \"file\", e.g., \"hello world\\n\", \"export default {}\"."),
-        overwrite: z.boolean().optional().describe("Allow replacing an existing file when type is \"file\", e.g., true, false."),
-        recursive: z.boolean().optional().describe("Create missing parent directories when creating a file or directory, e.g., true, false."),
-        encoding: z.enum(["utf8", "base64"]).optional().describe("Encoding for file content when type is \"file\", e.g., \"utf8\", \"base64\"."),
+        type: z.enum(["file", "directory"]).describe("Required. What to create: \"file\" or \"directory\"."),
+        path: z.string().describe("Required. Absolute or home-relative target path to create, for example \"~/project/src/new-file.ts\" or \"/Users/name/project/new-folder\"."),
+        recursive: z.boolean().optional().describe("Optional. When true, create missing parent directories. Default: true."),
+        fileContent: z.string().optional().describe("Optional. File contents to write when type is \"file\". If omitted for a file, an empty file is created. Do not provide this parameter when type is \"directory\"."),
+        overwriteFile: z.boolean().optional().describe("Optional. Only used when type is \"file\". When true, replace an existing file. Default: false."),
+        fileEncoding: z.enum(["utf8", "base64"]).optional().describe("Optional. Only used when type is \"file\". \"utf8\" or \"base64\". Default: \"utf8\". Do not provide this parameter when type is \"directory\"."),
       },
-      implementation: async ({ type, path: input, content, overwrite, recursive, encoding }) => {
-        const base = baseDir()
-        const target = resolveInputPath(base, input)
-        if (isErrorOutput(target)) return target
+      implementation: async ({ type, path: input, recursive, fileContent, overwriteFile, fileEncoding }) => {
+        const sandboxContext = await resolveSandboxContext()
+        const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, input)
+        if (resolved.error || !resolved.path) return resolved.error!
+
+        const target = resolved.path
 
         if (type === "file") {
-          const { stat, error } = await ensureExistingPathIsSafe(target, "file")
-          if (error) return error
-          if (stat?.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", target]])
-          if (stat && !overwrite) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
-          const fileEncoding = encoding ?? "utf8"
+          const existing = await inspectExistingPath(sandboxContext.sandboxBaseDir, target, "file")
+          if (existing.ok) {
+            if (!overwriteFile) return formatError("already_exists", "File already exists", [["kind", "file"], ["path", target]])
+          } else if (existing.kind !== "not_found") {
+            return formatBoundaryFailure(existing, "file")
+          } else {
+            const creatable = await inspectCreateTarget(sandboxContext.sandboxBaseDir, target, "file")
+            if (!creatable.ok) return formatBoundaryFailure(creatable, "file")
+          }
+
+          const resolvedFileEncoding = fileEncoding ?? "utf8"
           const rec = recursive ?? true
-          const text = content || ""
+          const text = fileContent || ""
           const lines = text.split(/\r?\n/)
           const count = text.length > 0 ? (text.endsWith("\n") ? lines.length - 1 : lines.length) : 0
+
           try {
-            const parentError = await ensureParentWithinBase(base, target)
-            if (parentError) return parentError
             if (rec) await fs.mkdir(path.dirname(target), { recursive: true })
-            const bytes = fileEncoding === "base64"
+            const bytes = resolvedFileEncoding === "base64"
               ? Buffer.from(text, "base64")
               : Buffer.from(text, "utf8")
             await fs.writeFile(target, bytes)
@@ -352,8 +350,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
               ["path", target],
               ["type", "file"],
               ["status", "created"],
-              ["encoding", fileEncoding],
-              ["overwritten", Boolean(stat)],
+              ["fileEncoding", resolvedFileEncoding],
+              ["overwritten", existing.ok],
               ["lines", count],
               ["bytes", bytes.byteLength],
             ])
@@ -362,24 +360,25 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           }
         }
 
-        // type === "directory"
-        if (content !== undefined) {
-          return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "content"]])
+        if (fileContent !== undefined) {
+          return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "fileContent"]])
         }
-        if (overwrite !== undefined) {
-          return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "overwrite"]])
+        if (overwriteFile !== undefined) {
+          return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "overwriteFile"]])
         }
-        if (encoding !== undefined) {
-          return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "encoding"]])
+        if (fileEncoding !== undefined) {
+          return formatError("invalid_parameter", "Parameter is not used when type is directory", [["parameter", "fileEncoding"]])
         }
-        const { stat, error } = await ensureExistingPathIsSafe(target, "directory")
-        if (error) return error
-        if (stat?.isFile()) return formatError("wrong_type", "Path is not a directory", [["expected", "directory"], ["actual", "file"], ["path", target]])
-        if (stat) return formatError("already_exists", "Directory already exists", [["kind", "directory"], ["path", target]])
+
+        const existing = await inspectExistingPath(sandboxContext.sandboxBaseDir, target, "directory")
+        if (existing.ok) return formatError("already_exists", "Directory already exists", [["kind", "directory"], ["path", target]])
+        if (existing.kind !== "not_found") return formatBoundaryFailure(existing, "directory")
+
+        const creatable = await inspectCreateTarget(sandboxContext.sandboxBaseDir, target, "directory")
+        if (!creatable.ok) return formatBoundaryFailure(creatable, "directory")
+
         const rec = recursive ?? true
         try {
-          const parentError = await ensureParentWithinBase(base, target)
-          if (parentError) return parentError
           await fs.mkdir(target, { recursive: rec })
         } catch (error) {
           return formatError("filesystem_error", "Filesystem operation failed", [["path", target], ["details", error instanceof Error ? error.message : String(error)]])
@@ -398,31 +397,29 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     tool({
       name: "edit",
       description:
-        "Edit an existing text file by applying exact text replacements in order, failing on missing, ambiguous, or no-op edits.",
+        "Edit a text file by applying exact text replacements in order. Use this only when you know the exact current text to replace and the exact new text to write. This tool is often useful after read or grep has shown you the exact text to change.",
       parameters: {
-        path: z.string().describe("Absolute or home-relative file path to edit, e.g., \"/home/user/file.ts\", \"~/project/config.json\"."),
+        filePath: z.string().describe("Required. Absolute or home-relative path to the file to edit."),
         edits: z
           .array(
             z.object({
-              oldString: z.string().describe("Exact text to find and replace, e.g., \"const x = 1\", \"Hello World\"."),
-              newString: z.string().describe("Replacement text, e.g., \"const x = 2\", \"Hello Universe\"."),
-              replaceAll: z.boolean().optional().describe("Set to true to replace every match of oldString; otherwise exactly one match is required, e.g., true, false."),
+              oldString: z.string().describe("Required. Exact literal text to find. Must not be empty."),
+              newString: z.string().describe("Required. Exact replacement text to write. May be empty if you want to delete the matched text."),
+              replaceAll: z.boolean().optional().describe("Optional. When true, replace every match of oldString. Default: false, which means the edit expects exactly one match."),
             }),
           )
           .min(1)
-          .describe("Array of exact text replacements to apply in order, e.g., [{\"oldString\":\"foo\",\"newString\":\"bar\"}]."),
-        encoding: z.enum(["utf8"]).optional().describe("Encoding of the file being edited, e.g., \"utf8\"."),
+          .describe("Required. Non-empty array of edit objects applied in order. Each edit object must include oldString and newString, and may include replaceAll. Example: [{\"oldString\":\"const enabled = false\",\"newString\":\"const enabled = true\"}]."),
+        fileEncoding: z.enum(["utf8"]).optional().describe("Optional. File encoding. \"utf8\". Default: \"utf8\"."),
       },
-      implementation: async ({ path: input, edits, encoding }) => {
-        const base = baseDir()
-        const file = resolveInputPath(base, input)
-        if (isErrorOutput(file)) return file
+      implementation: async ({ filePath: input, edits, fileEncoding }) => {
+        const sandboxContext = await resolveSandboxContext()
+        const resolved = resolveToolPath(sandboxContext.sandboxBaseDir, input)
+        if (resolved.error || !resolved.path) return resolved.error!
 
-        const { stat, error } = await ensureExistingPathIsSafe(file, "file")
-        if (error) return error
-        if (!stat) return formatError("not_found", "File not found", [["kind", "file"], ["path", file]])
-        if (stat.isDirectory()) return formatError("wrong_type", "Path is a directory", [["expected", "file"], ["actual", "directory"], ["path", file]])
-        if (await binary(file)) return formatError("binary_file", "Cannot edit binary file", [["path", file]])
+        const checked = await inspectExistingPath(sandboxContext.sandboxBaseDir, resolved.path, "file")
+        if (!checked.ok) return formatBoundaryFailure(checked, "file")
+        if (await binary(resolved.path)) return formatError("binary_file", "Cannot edit binary file", [["path", resolved.path]])
 
         const countMatches = (body: string, needle: string) => {
           let count = 0
@@ -435,15 +432,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           }
         }
 
-        let body = await fs.readFile(file, "utf8")
+        const resolvedFileEncoding = fileEncoding ?? "utf8"
+
+        let body = await fs.readFile(resolved.path, "utf8")
         for (const edit of edits) {
           if (edit.oldString.length === 0) return formatError("invalid_parameter", "Parameter must not be empty", [["parameter", "oldString"]])
           if (edit.oldString === edit.newString) return formatError("no_change", "Edit would not change the file")
 
           const matches = countMatches(body, edit.oldString)
-          if (matches === 0) return formatError("match_not_found", "oldString not found", [["path", file]])
+          if (matches === 0) return formatError("match_not_found", "oldString not found", [["path", resolved.path]])
           if (matches > 1 && edit.replaceAll !== true) {
-            return formatError("ambiguous_match", "oldString matched multiple times", [["path", file], ["matches", matches], ["details", "Use replaceAll to edit all matches"]])
+            return formatError("ambiguous_match", "oldString matched multiple times", [["path", resolved.path], ["matches", matches], ["details", "Use replaceAll to edit all matches"]])
           }
 
           if (edit.replaceAll) {
@@ -455,12 +454,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           body = body.slice(0, index) + edit.newString + body.slice(index + edit.oldString.length)
         }
 
-        await fs.writeFile(file, body, "utf8")
+        try {
+          await fs.writeFile(resolved.path, body, "utf8")
+        } catch (error) {
+          return formatError("filesystem_error", "Filesystem operation failed", [["path", resolved.path], ["details", error instanceof Error ? error.message : String(error)]])
+        }
         return formatOutput([
-          ["path", file],
+          ["path", resolved.path],
           ["type", "file"],
           ["status", "edited"],
-          ["encoding", encoding ?? "utf8"],
+          ["fileEncoding", resolvedFileEncoding],
           ["changes_requested", edits.length],
           ["changes_performed", edits.length],
         ])

@@ -3,8 +3,9 @@ import os from "node:os"
 import path from "node:path"
 import { Minimatch } from "minimatch"
 
-export const READ_LIMIT = 2000
+export const READ_LIMIT = 500
 export const FILE_LIMIT = 100
+export const GREP_LIMIT = 50
 export const DEFAULT_IGNORES = [
   ".git",
   "node_modules",
@@ -80,6 +81,7 @@ export type WalkOptions = {
   exclude?: string[]
   recursive?: boolean
   type?: "all" | "files" | "directories"
+  sandboxBaseDir?: string
 }
 
 export const IGNORE_PATHS_ENV = "LMS_FILESYSTEM_IGNORE_PATHS"
@@ -88,7 +90,7 @@ export class PathOutsideBaseError extends Error {
   filePath: string
 
   constructor(filePath: string) {
-    super(`Path is outside the configured base directory: ${filePath}`)
+    super(`Path is outside the configured sandbox base directory: ${filePath}`)
     this.name = "PathOutsideBaseError"
     this.filePath = filePath
   }
@@ -102,8 +104,7 @@ export const expandHome = (input: string) => {
 
 export const resolvePath = (base: string, input?: string) => {
   const full = path.resolve(base, expandHome(input || "."))
-  const rel = path.relative(base, full)
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (!withinBase(base, full)) {
     throw new PathOutsideBaseError(full)
   }
   return full
@@ -111,7 +112,13 @@ export const resolvePath = (base: string, input?: string) => {
 
 export const relPath = (base: string, target: string) => path.relative(base, target).split(path.sep).join("/") || "."
 
-export const compile = (patterns?: string[]) => (patterns || []).map((item) => new Minimatch(item, { dot: true, nocase: true }))
+const expandPattern = (pattern: string) => {
+  if (pattern.includes("/")) return [pattern]
+  return [pattern, `**/${pattern}`]
+}
+
+export const compile = (patterns?: string[]) =>
+  (patterns || []).flatMap((item) => expandPattern(item).map((pattern) => new Minimatch(pattern, { dot: true, nocase: false })))
 
 export const defaultIgnoreList = () => {
   const raw = process.env[IGNORE_PATHS_ENV]
@@ -138,7 +145,14 @@ export const blocked = (file: string, base: string) => {
   return isSystemPath(file)
 }
 
-export const walk = async (base: string, opts?: WalkOptions) => {
+export const withinBase = (base: string, target: string) => {
+  const rel = path.relative(base, target)
+  return rel === "" || (!(rel === ".." || rel.startsWith(`..${path.sep}`)) && !path.isAbsolute(rel))
+}
+
+export const walk = async (base: string, realBase: string, opts?: WalkOptions) => {
+  const { inspectTraversalRoot, inspectNestedEntry } = await import("./boundary")
+
   const out: Item[] = []
   const skip = compile(opts?.ignore)
   const include = compile(opts?.include)
@@ -147,24 +161,40 @@ export const walk = async (base: string, opts?: WalkOptions) => {
   const defaultMatchers = compile(defaults)
   const recursive = opts?.recursive ?? true
   const type = opts?.type ?? "all"
+  const sandboxBase = opts?.sandboxBaseDir ?? base
+  const rootCheck = await inspectTraversalRoot(sandboxBase, base)
+  if (!rootCheck.ok) {
+    throw new Error(rootCheck.details ?? rootCheck.kind)
+  }
 
   const visit = async (dir: string) => {
     if (blocked(dir, base)) return
-    const items = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+    let items: import("fs").Dirent[]
+    try {
+      items = await fs.readdir(dir, { withFileTypes: true })
+    } catch (err: unknown) {
+      if (dir !== base && err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") return
+      throw err
+    }
     items.sort((a, b) => a.name.localeCompare(b.name))
+
     for (const item of items) {
       const full = path.join(dir, item.name)
+      const nested = await inspectNestedEntry(realBase, full, "any")
+      if (!nested.ok || !nested.stat) continue
       if (blocked(full, base)) continue
+
       const rel = relPath(base, full)
       if (ignored(rel, skip, defaults, defaultMatchers)) continue
       if (matchesPattern(rel, exclude)) continue
-      if (item.isDirectory()) {
+
+      if (nested.stat.isDirectory()) {
         if (type !== "files" && (include.length === 0 || matchesPattern(rel, include))) out.push({ path: full, dir: true })
         if (recursive) await visit(full)
         continue
       }
-      const stat = await fs.lstat(full).catch(() => undefined)
-      if (!stat || stat.isSymbolicLink() || !stat.isFile()) continue
+
+      if (!nested.stat.isFile()) continue
       if (include.length > 0 && !matchesPattern(rel, include)) continue
       if (type !== "directories") out.push({ path: full, dir: false })
     }

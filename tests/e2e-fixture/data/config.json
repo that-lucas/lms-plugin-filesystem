@@ -1,0 +1,5 @@
+{
+  "fixture": true,
+  "name": "filesystem-e2e",
+  "markers": ["CONFIG_SENTINEL", "ALPHA_MARKER"]
+}

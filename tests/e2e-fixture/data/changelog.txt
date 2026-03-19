@@ -1,0 +1,2 @@
+fixture ready
+smoke assertion log
